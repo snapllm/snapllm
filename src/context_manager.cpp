@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <random>
 #include <cstring>
+#include <mutex>
 
 namespace snapllm {
 

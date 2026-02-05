@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <chrono>
 #include <algorithm>
+#include <mutex>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;

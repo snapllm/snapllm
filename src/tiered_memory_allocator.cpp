@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <mutex>
 
 // Platform-specific aligned allocation
 #ifdef _MSC_VER
