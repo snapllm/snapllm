@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 SNAPLLM_PATH="${1:?usage: ci_smoke_test.sh <snapllm_path> [port] [timeout_sec]}"

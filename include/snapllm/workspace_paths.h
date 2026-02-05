@@ -23,6 +23,8 @@
 #pragma once
 
 #include <string>
+#include <cstring>
+#include <cstdlib>
 #include <vector>
 #include <optional>
 #include <filesystem>

@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -24,6 +24,16 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build_cpu --config Release -j 2
+      - name: Verify binary exists
+        run: |
+          if (!(Test-Path "build_cpu\bin\snapllm.exe")) {
+            Write-Error "Binary not found at build_cpu\bin\snapllm.exe"
+            Get-ChildItem -Recurse build_cpu\bin\ -ErrorAction SilentlyContinue
+            Get-ChildItem -Recurse build_cpu\Release\ -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Write-Host "Binary found: build_cpu\bin\snapllm.exe"
+        shell: pwsh
       - name: Smoke Test
         run: >-
           powershell -File scripts/ci_smoke_test.ps1
@@ -49,7 +59,7 @@ jobs:
       - name: Smoke Test
         run: |
           chmod +x scripts/ci_smoke_test.sh
-          scripts/ci_smoke_test.sh build_cpu/bin/snapllm
+          bash scripts/ci_smoke_test.sh build_cpu/bin/snapllm
 
   desktop-app:
     runs-on: ubuntu-latest

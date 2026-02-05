@@ -331,7 +331,11 @@ public:
     void close() {
         if (connected_) {
             connected_ = false;
+#ifdef _WIN32
             closesocket(socket_);
+#else
+            ::close(socket_);
+#endif
         }
     }
 
