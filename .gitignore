@@ -114,8 +114,8 @@ output*.jpg
 *.bin
 *.pt
 *.pth
-models/
-Models/
+/models/
+/Models/
 
 # =============================================================================
 # Workspace data (user-specific)

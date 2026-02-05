@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iomanip>
+#include <mutex>
 
 namespace snapllm {
 
