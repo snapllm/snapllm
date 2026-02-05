@@ -14,6 +14,7 @@
   <a href="#quick-start">Quick Start</a> |
   <a href="#api-reference">API Reference</a> |
   <a href="#architecture">Architecture</a> |
+  <a href="#demo-videos">Demo Videos</a> |
   <a href="#contributing">Contributing</a> |
   <a href="#sponsors">Sponsors</a>
 </p>
@@ -598,6 +599,13 @@ npm install
 npm run dev
 # Open http://localhost:9780
 ```
+
+---
+
+## Demo Videos
+
+- [SnapLLM Desktop App Demo (Vimeo)](https://vimeo.com/1157629276?fl=ip&fe=ec)
+- [SnapLLM Server and API Demo (Vimeo)](https://vimeo.com/1157624031?fl=ip&fe=ec)
 
 ---
 
