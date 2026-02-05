@@ -8,9 +8,11 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
+      - name: Enable long paths
+        run: git config --global core.longpaths true
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          fetch-depth: 1
       - name: Configure
         run: >-
           cmake -S . -B build_cpu -G "Visual Studio 17 2022" -A x64
@@ -32,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          fetch-depth: 1
       - name: Configure
         run: >-
           cmake -S . -B build_cpu
@@ -56,6 +58,8 @@ jobs:
         working-directory: desktop-app
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
       - uses: actions/setup-node@v4
         with:
           node-version: 18
@@ -71,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          fetch-depth: 1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
