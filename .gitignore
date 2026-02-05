@@ -9,8 +9,8 @@ build_cpu/
 build_*/
 cmake-build-*/
 out/
-bin/
-lib/
+/bin/
+/lib/
 dist/
 releases/
 
@@ -38,8 +38,8 @@ _deps/
 *.sln.docstates
 *.vcxproj.filters
 *.vcxproj.user
-x64/
-x86/
+/x64/
+/x86/
 Debug/
 Release/
 *.pdb
