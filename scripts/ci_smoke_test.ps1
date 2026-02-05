@@ -5,9 +5,14 @@ param(
     [int]$TimeoutSec = 60
 )
 
+$ErrorActionPreference = "Stop"
+
 if (-not (Test-Path $SnapllmPath)) {
     throw "snapllm binary not found at: $SnapllmPath"
 }
+
+Write-Host "Starting SnapLLM server: $SnapllmPath"
+Write-Host "  Host: $BindHost  Port: $Port  Timeout: ${TimeoutSec}s"
 
 $logDir = Join-Path $env:TEMP "snapllm-ci"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -18,16 +23,18 @@ if (Test-Path $stderrLog) { Remove-Item $stderrLog -Force }
 
 $proc = Start-Process `
     -FilePath $SnapllmPath `
-    -ArgumentList "--server --host $BindHost --port $Port" `
-    -WorkingDirectory (Get-Location) `
+    -ArgumentList "--server", "--host", $BindHost, "--port", "$Port" `
     -PassThru `
-    -NoNewWindow `
+    -WindowStyle Hidden `
     -RedirectStandardOutput $stdoutLog `
     -RedirectStandardError $stderrLog
 
 $healthy = $false
 
 try {
+    # Give the process a moment to start up
+    Start-Sleep -Seconds 2
+
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         if ($proc -and $proc.HasExited) {
@@ -37,8 +44,9 @@ try {
         }
 
         try {
-            $resp = Invoke-WebRequest -Uri "http://$BindHost:$Port/health" -UseBasicParsing -TimeoutSec 2
+            $resp = Invoke-WebRequest -Uri "http://${BindHost}:${Port}/health" -UseBasicParsing -TimeoutSec 5
             if ($resp.StatusCode -eq 200) {
+                Write-Host "Health check passed: $($resp.Content)"
                 $healthy = $true
                 break
             }
@@ -54,6 +62,6 @@ try {
     }
 } finally {
     if ($proc -and -not $proc.HasExited) {
-        Stop-Process -Id $proc.Id -Force
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     }
 }

@@ -36,6 +36,12 @@ option(SNAPLLM_ENABLE_DIFFUSION "Enable image generation support" ON)
 option(SNAPLLM_ENABLE_MULTIMODAL "Enable multimodal (vision/audio) support" ON)
 option(SNAPLLM_ENABLE_PYTHON_BINDINGS "Enable Python bindings (pybind11)" OFF)
 
+# Python bindings produce a shared library (.so) that links static libs,
+# so every translation unit must be compiled with -fPIC.
+if(SNAPLLM_ENABLE_PYTHON_BINDINGS)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # =============================================================================
 # Configuration Summary
 # =============================================================================
