@@ -19,8 +19,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/snapllm/snapllm/releases"><img src="https://img.shields.io/github/v/release/snapllm/snapllm?style=flat-square" alt="Release"/></a>
-  <a href="https://github.com/snapllm/snapllm/actions/workflows/ci.yml"><img src="https://github.com/snapllm/snapllm/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"/></a>
+  <a href="https://github.com/snapllm/snapllm/releases"><img src="https://img.shields.io/github/v/tag/snapllm/snapllm?label=version&style=flat-square" alt="Version"/></a>
+  <a href="https://github.com/snapllm/snapllm/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/snapllm/snapllm/ci.yml?branch=main&style=flat-square" alt="CI"/></a>
   <a href="https://github.com/snapllm/snapllm/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"/></a>
   <a href="https://github.com/snapllm/snapllm/stargazers"><img src="https://img.shields.io/github/stars/snapllm/snapllm?style=flat-square" alt="Stars"/></a>
   <a href="https://github.com/snapllm/snapllm/issues"><img src="https://img.shields.io/github/issues/snapllm/snapllm?style=flat-square" alt="Issues"/></a>
