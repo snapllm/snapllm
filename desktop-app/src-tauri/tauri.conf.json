@@ -1,0 +1,73 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:9780",
+    "distDir": "../dist",
+    "withGlobalTauri": false
+  },
+  "package": {
+    "productName": "SnapLLM",
+    "version": "1.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true
+      },
+      "dialog": {
+        "all": false,
+        "open": true
+      },
+      "fs": {
+        "all": false,
+        "readDir": true,
+        "copyFile": true,
+        "createDir": true,
+        "exists": true,
+        "scope": [
+          "$APP/**",
+          "$RESOURCE/**",
+          "C:/Models/**",
+          "D:/Models/**",
+          "C:/SnapLLM_Workspace/**",
+          "D:/SnapLLM_Workspace/**",
+          "C:/Users/*/SnapLLM_Workspace/**"
+        ]
+      },
+      "http": {
+        "all": false,
+        "request": true,
+        "scope": ["http://localhost:6930/**", "http://127.0.0.1:6930/**"]
+      }
+    },
+    "bundle": {
+      "active": true,
+      "targets": "all",
+      "identifier": "com.snapllm.desktop",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ]
+    },
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "resizable": true,
+        "title": "SnapLLM - Multi-Model LLM Serving",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1200,
+        "minHeight": 700
+      }
+    ]
+  }
+}

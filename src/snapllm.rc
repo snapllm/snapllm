@@ -1,0 +1,37 @@
+// SnapLLM Windows Resource File
+// This embeds the application icon into the executable
+
+#include <windows.h>
+
+// Icon resource - IDI_ICON1 is the main application icon
+IDI_ICON1 ICON "snapllm.ico"
+
+// Version information
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "AroorA AI Lab\0"
+            VALUE "FileDescription", "SnapLLM - Ultra-fast Multi-Model LLM Inference Engine\0"
+            VALUE "FileVersion", "1.0.0.0\0"
+            VALUE "InternalName", "snapllm\0"
+            VALUE "LegalCopyright", "MIT License\0"
+            VALUE "OriginalFilename", "snapllm.exe\0"
+            VALUE "ProductName", "SnapLLM\0"
+            VALUE "ProductVersion", "1.0.0.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END

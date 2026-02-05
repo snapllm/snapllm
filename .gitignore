@@ -1,0 +1,254 @@
+# SnapLLM .gitignore
+
+# =============================================================================
+# Build directories
+# =============================================================================
+build/
+build_gpu/
+build_cpu/
+build_*/
+cmake-build-*/
+out/
+bin/
+lib/
+dist/
+releases/
+
+# =============================================================================
+# CMake generated files
+# =============================================================================
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+compile_commands.json
+install_manifest.txt
+CTestTestfile.cmake
+_deps/
+
+# =============================================================================
+# IDE and Editor files
+# =============================================================================
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.vcxproj.filters
+*.vcxproj.user
+x64/
+x86/
+Debug/
+Release/
+*.pdb
+*.ilk
+*.idb
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# =============================================================================
+# Compiled binaries and objects
+# =============================================================================
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+*.pyd
+*.o
+*.obj
+*.lo
+*.slo
+*.pch
+*.gch
+*.exp
+
+# =============================================================================
+# Test and temporary files
+# =============================================================================
+*.log
+*.tmp
+*.temp
+*.bak
+*.cache
+test_*.png
+test_*.jpg
+*.test
+output*.png
+output*.jpg
+
+# =============================================================================
+# Model files (large, should not be in repo)
+# =============================================================================
+*.gguf
+*.ggml
+*.safetensors
+*.ckpt
+*.bin
+*.pt
+*.pth
+models/
+Models/
+
+# =============================================================================
+# Workspace data (user-specific)
+# =============================================================================
+*_Workspace/
+SnapLLM_Workspace/
+workspace.bin
+index.json
+
+# =============================================================================
+# Package manager and dependencies
+# =============================================================================
+node_modules/
+yarn.lock
+pnpm-lock.yaml
+.npm/
+.pnpm-store/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.env
+.venv
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.python-version
+
+# =============================================================================
+# OS generated files
+# =============================================================================
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+.directory
+.Trash-*
+
+# =============================================================================
+# CUDA and GPU files
+# =============================================================================
+*.fatbin
+*.cubin
+*.ptx
+*.gpu
+*.linkinfo
+
+# =============================================================================
+# Claude Code / AI assistant
+# =============================================================================
+.claude/
+
+# =============================================================================
+# External dependencies (submodules managed separately)
+# =============================================================================
+# Don't ignore external/ since it contains CMakeLists.txt
+# But ignore build artifacts that might end up there
+external/*/build/
+external/*/*.o
+external/*/*.a
+
+# =============================================================================
+# Desktop app build artifacts
+# =============================================================================
+desktop-app/dist/
+desktop-app/src-tauri/target/
+desktop-app/.next/
+desktop-app/out/
+
+# =============================================================================
+# API server artifacts
+# =============================================================================
+api-server/__pycache__/
+api-server/*.log
+
+# =============================================================================
+# Internal development files (not for public repo)
+# =============================================================================
+_dev_notes/
+.memory/
+session_notes/
+*.session.md
+*.handoff.md
+
+# =============================================================================
+# Secrets and credentials
+# =============================================================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# =============================================================================
+# Coverage and profiling
+# =============================================================================
+*.gcov
+*.gcda
+*.gcno
+coverage/
+.coverage
+htmlcov/
+*.profraw
+*.profdata
+
+# =============================================================================
+# Documentation build
+# =============================================================================
+docs/_build/
+site/
+.docusaurus/
+
+# =============================================================================
+# Backup files
+# =============================================================================
+*.backup
+*.backup_*
+*.orig
+*.rej

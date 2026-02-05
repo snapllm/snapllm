@@ -1,0 +1,606 @@
+# SnapLLM HTTP Server API Documentation
+# ISON Format - Token-Efficient API Reference
+
+api.info
+name SnapLLM
+version 1.0.0
+base_url http://localhost:6930
+description "Multi-model LLM inference engine with <1ms model switching"
+
+# ============================================================================
+# HEALTH & STATUS
+# ============================================================================
+
+table.endpoints.health
+path method description
+/health GET "Server health check"
+/v1/health GET "Server health check (alias)"
+
+endpoint.health.response
+status ok
+version "1.0.0"
+timestamp "2026-01-19T12:00:00Z"
+models_loaded 3
+current_model medicine
+
+# ============================================================================
+# OPENAI-COMPATIBLE ENDPOINTS
+# ============================================================================
+
+table.endpoints.openai
+path method description
+/v1/models GET "List loaded models (OpenAI format)"
+/v1/chat/completions POST "Chat completion with streaming"
+
+endpoint.models.response
+object list
+data [
+  {id medicine object model created 1737295200 owned_by snapllm}
+  {id legal object model created 1737295200 owned_by snapllm}
+]
+
+endpoint.chat.request
+model medicine
+max_tokens 2000
+temperature 0.8
+stream false
+messages [
+  {role system content "You are a medical assistant."}
+  {role user content "What is diabetes?"}
+]
+
+endpoint.chat.response
+id "chatcmpl-abc123def456"
+object chat.completion
+created 1737295200
+model medicine
+choices [
+  {
+    index 0
+    message {role assistant content "Diabetes is a chronic condition..."}
+    finish_reason stop
+  }
+]
+usage {prompt_tokens 25 completion_tokens 150 total_tokens 175}
+
+# ============================================================================
+# ANTHROPIC-COMPATIBLE ENDPOINTS (Claude Code Support)
+# ============================================================================
+
+table.endpoints.anthropic
+path method description
+/v1/messages POST "Messages API (Anthropic format) - Claude Code compatible"
+
+endpoint.messages.request
+model medicine
+max_tokens 4096
+temperature 1.0
+stream false
+system "You are a helpful medical assistant."
+messages [
+  {role user content "What is diabetes?"}
+]
+
+endpoint.messages.response
+id "msg_abc123def456"
+type message
+role assistant
+content [{type text text "Diabetes is a chronic metabolic condition..."}]
+model medicine
+stop_reason end_turn
+stop_sequence null
+usage {input_tokens 25 output_tokens 150}
+
+endpoint.messages.streaming
+# SSE events for streaming response
+event.message_start {type message_start message {id msg_abc123 type message role assistant content [] model medicine}}
+event.content_block_start {type content_block_start index 0 content_block {type text text ""}}
+event.content_block_delta {type content_block_delta index 0 delta {type text_delta text "Diabetes"}}
+event.content_block_stop {type content_block_stop index 0}
+event.message_delta {type message_delta delta {stop_reason end_turn} usage {output_tokens 150}}
+event.message_stop {type message_stop}
+
+# ============================================================================
+# TOOL CALLING (Anthropic Format)
+# ============================================================================
+
+endpoint.messages.tools.request
+model medicine
+max_tokens 4096
+tools [
+  {
+    name get_patient_history
+    description "Retrieve patient medical history by ID"
+    input_schema {
+      type object
+      properties {
+        patient_id {type string description "Patient identifier"}
+        include_labs {type boolean description "Include lab results"}
+      }
+      required [patient_id]
+    }
+  }
+  {
+    name search_medical_database
+    description "Search medical literature and guidelines"
+    input_schema {
+      type object
+      properties {
+        query {type string description "Search query"}
+        max_results {type integer description "Maximum results to return"}
+      }
+      required [query]
+    }
+  }
+]
+messages [
+  {role user content "What is the patient history for ID 12345?"}
+]
+
+endpoint.messages.tools.response_with_tool_use
+id "msg_abc123def456"
+type message
+role assistant
+content [
+  {type text text "I'll look up the patient history for you."}
+  {
+    type tool_use
+    id "toolu_abc123"
+    name get_patient_history
+    input {patient_id "12345" include_labs true}
+  }
+]
+model medicine
+stop_reason tool_use
+usage {input_tokens 150 output_tokens 45}
+
+endpoint.messages.tools.followup_with_result
+model medicine
+max_tokens 4096
+messages [
+  {role user content "What is the patient history for ID 12345?"}
+  {
+    role assistant
+    content [
+      {type text text "I'll look up the patient history for you."}
+      {type tool_use id "toolu_abc123" name get_patient_history input {patient_id "12345" include_labs true}}
+    ]
+  }
+  {
+    role user
+    content [
+      {
+        type tool_result
+        tool_use_id "toolu_abc123"
+        content "Patient John Doe, DOB 1980-05-15. Conditions: Type 2 Diabetes (diagnosed 2015), Hypertension. Recent labs: HbA1c 7.2%, BP 135/85."
+      }
+    ]
+  }
+]
+
+endpoint.messages.tools.final_response
+id "msg_def456ghi789"
+type message
+role assistant
+content [
+  {
+    type text
+    text "Based on the patient history for ID 12345:\n\n**Patient:** John Doe\n**DOB:** May 15, 1980\n\n**Active Conditions:**\n- Type 2 Diabetes (diagnosed 2015)\n- Hypertension\n\n**Recent Lab Results:**\n- HbA1c: 7.2% (slightly above target of <7%)\n- Blood Pressure: 135/85 (stage 1 hypertension)\n\nThe patient's diabetes appears to be reasonably controlled but may benefit from medication adjustment."
+  }
+]
+model medicine
+stop_reason end_turn
+usage {input_tokens 250 output_tokens 120}
+
+# ============================================================================
+# EXTENDED THINKING (Anthropic Format)
+# ============================================================================
+
+endpoint.messages.thinking.request
+model medicine
+max_tokens 8192
+thinking {
+  type enabled
+  budget_tokens 2048
+}
+messages [
+  {role user content "Solve this step by step: What is 23 * 47 + 156 / 12?"}
+]
+
+endpoint.messages.thinking.response
+id "msg_think123"
+type message
+role assistant
+content [
+  {
+    type thinking
+    thinking "Let me work through this step by step:\n1. First, I'll calculate 23 * 47\n   23 * 47 = 23 * 40 + 23 * 7 = 920 + 161 = 1081\n2. Next, I'll calculate 156 / 12\n   156 / 12 = 13\n3. Finally, I'll add the results\n   1081 + 13 = 1094"
+  }
+  {
+    type text
+    text "The answer is 1094.\n\nHere's how I calculated it:\n- 23 × 47 = 1081\n- 156 ÷ 12 = 13\n- 1081 + 13 = 1094"
+  }
+]
+model medicine
+stop_reason end_turn
+usage {input_tokens 45 output_tokens 180}
+
+# ============================================================================
+# BATCH TOOL CALLING
+# ============================================================================
+
+endpoint.messages.batch_tools.request
+model medicine
+max_tokens 4096
+tools [
+  {name get_weather description "Get weather for a location" input_schema {type object properties {location {type string}} required [location]}}
+  {name get_time description "Get current time for a timezone" input_schema {type object properties {timezone {type string}} required [timezone]}}
+]
+messages [
+  {role user content "What's the weather in Tokyo and New York, and what time is it in both cities?"}
+]
+
+endpoint.messages.batch_tools.response
+id "msg_batch123"
+type message
+role assistant
+content [
+  {type text text "I'll check the weather and time for both cities."}
+  {type tool_use id "toolu_001" name get_weather input {location "Tokyo, Japan"}}
+  {type tool_use id "toolu_002" name get_weather input {location "New York, USA"}}
+  {type tool_use id "toolu_003" name get_time input {timezone "Asia/Tokyo"}}
+  {type tool_use id "toolu_004" name get_time input {timezone "America/New_York"}}
+]
+model medicine
+stop_reason tool_use
+usage {input_tokens 120 output_tokens 95}
+
+endpoint.messages.batch_tools.followup
+model medicine
+max_tokens 4096
+messages [
+  {role user content "What's the weather in Tokyo and New York, and what time is it in both cities?"}
+  {
+    role assistant
+    content [
+      {type text text "I'll check the weather and time for both cities."}
+      {type tool_use id "toolu_001" name get_weather input {location "Tokyo, Japan"}}
+      {type tool_use id "toolu_002" name get_weather input {location "New York, USA"}}
+      {type tool_use id "toolu_003" name get_time input {timezone "Asia/Tokyo"}}
+      {type tool_use id "toolu_004" name get_time input {timezone "America/New_York"}}
+    ]
+  }
+  {
+    role user
+    content [
+      {type tool_result tool_use_id "toolu_001" content "Tokyo: 22°C, Partly cloudy"}
+      {type tool_result tool_use_id "toolu_002" content "New York: 18°C, Sunny"}
+      {type tool_result tool_use_id "toolu_003" content "Tokyo: 2:30 PM JST"}
+      {type tool_result tool_use_id "toolu_004" content "New York: 1:30 AM EST"}
+    ]
+  }
+]
+
+# ============================================================================
+# MODEL MANAGEMENT
+# ============================================================================
+
+table.endpoints.models
+path method description
+/api/v1/models GET "List models (extended format)"
+/api/v1/models/load POST "Load a model from file"
+/api/v1/models/switch POST "Switch active model (<1ms)"
+/api/v1/models/unload POST "Unload a model"
+/api/v1/models/:name DELETE "Unload model by name"
+
+endpoint.load.request
+model_id medicine
+file_path "D:/Models/medicine-llm.Q8_0.gguf"
+cache_only false
+
+endpoint.load.response
+status success
+message "Model loaded: medicine"
+model medicine
+load_time_ms 2500.5
+cache_only false
+
+endpoint.switch.request
+name medicine
+
+endpoint.switch.response
+status success
+message "Switched to model: medicine"
+model medicine
+switch_time_ms 0.45
+
+# ============================================================================
+# TEXT GENERATION (Non-Chat)
+# ============================================================================
+
+table.endpoints.generate
+path method description
+/api/v1/generate POST "Raw text generation"
+/api/v1/generate/batch POST "Batch text generation"
+
+endpoint.generate.request
+prompt "The capital of France is"
+model medicine
+max_tokens 512
+temperature 0.8
+top_p 0.95
+top_k 40
+repeat_penalty 1.1
+
+endpoint.generate.response
+status success
+prompt "The capital of France is"
+generated_text " Paris, which is also the largest city in France..."
+model medicine
+generation_time_s 2.5
+tokens_per_second 60.5
+
+# ============================================================================
+# CACHE MANAGEMENT
+# ============================================================================
+
+table.endpoints.cache
+path method description
+/api/v1/models/cache/stats GET "Get comprehensive cache statistics"
+/api/v1/models/cache/clear POST "Clear all caches"
+
+endpoint.cache_stats.response
+status success
+models [
+  {
+    model_id medicine
+    is_current true
+    cache_hits 1250
+    cache_misses 150
+    cache_hit_rate 0.893
+    total_reads 5000
+    total_writes 200
+    bytes_read 2684354560
+    bytes_written 104857600
+    workspace_total_mb 102400
+    workspace_used_mb 6144
+    workspace_utilization 0.06
+    tensor_cache_used_mb 1800
+    tensor_cache_budget_mb 2048
+    tensor_cache_utilization 0.878
+    tensor_cache_hit_rate 0.92
+    cached_tensor_count 145
+    fragmentation 0.02
+    estimated_speedup 2.79
+  }
+]
+summary {
+  total_models 2
+  current_model medicine
+  total_memory_mb 3600
+  total_cache_hits 2500
+  total_cache_misses 300
+  global_hit_rate 0.893
+  total_reads 10000
+  total_writes 400
+  total_bytes_read_mb 5120
+  total_bytes_written_mb 200
+  average_speedup 2.79
+}
+
+# ============================================================================
+# DIFFUSION (Image/Video Generation)
+# ============================================================================
+
+table.endpoints.diffusion
+path method description enabled
+/api/v1/diffusion/generate POST "Generate image from prompt" SNAPLLM_HAS_DIFFUSION
+/api/v1/diffusion/video POST "Generate video from prompt" SNAPLLM_HAS_DIFFUSION
+
+endpoint.diffusion_image.request
+prompt "A beautiful sunset over mountains"
+negative_prompt "blurry, low quality"
+model sd15
+width 512
+height 512
+steps 20
+cfg_scale 7.0
+seed -1
+
+endpoint.diffusion_image.response
+status success
+image_url "/api/v1/images/img_abc123.png"
+prompt "A beautiful sunset over mountains"
+model sd15
+generation_time_s 15.5
+seed 42
+width 512
+height 512
+
+# ============================================================================
+# VISION/MULTIMODAL
+# ============================================================================
+
+table.endpoints.vision
+path method description enabled
+/api/v1/vision/generate POST "Analyze image with prompt" SNAPLLM_HAS_MULTIMODAL
+/v1/messages POST "Messages API with image blocks" always
+
+# Vision via dedicated endpoint
+endpoint.vision.request
+prompt "What is in this image?"
+image "base64_encoded_image_data..."
+model gemma4b
+max_tokens 512
+
+endpoint.vision.response
+status success
+response "The image shows a Border Collie dog with distinctive black and white fur..."
+model gemma4b
+generation_time_s 3.5
+tokens_per_second 45.2
+
+# Vision via Anthropic Messages API (recommended)
+endpoint.messages.vision.request
+model gemma4b
+max_tokens 1024
+messages [
+  {
+    role user
+    content [
+      {
+        type image
+        source {
+          type base64
+          media_type "image/jpeg"
+          data "/9j/4AAQSkZJRg..."
+        }
+      }
+      {
+        type text
+        text "What is in this image? Describe in detail."
+      }
+    ]
+  }
+]
+
+endpoint.messages.vision.response
+id "msg_vision123"
+type message
+role assistant
+content [
+  {
+    type text
+    text "The image shows a golden retriever dog lying on a green lawn. The dog appears to be relaxed and happy, with its tongue out. In the background, there are trees and a wooden fence. The lighting suggests it's a sunny afternoon."
+  }
+]
+model gemma4b
+stop_reason end_turn
+usage {input_tokens 1200 output_tokens 65}
+
+# ============================================================================
+# ERROR RESPONSES
+# ============================================================================
+
+error.openai_format
+error {
+  message "Model not loaded: unknown_model"
+  type not_found_error
+  code 404
+}
+
+error.anthropic_format
+type error
+error {
+  type not_found_error
+  message "Model not loaded: unknown_model"
+}
+
+# ============================================================================
+# CLAUDE CODE INTEGRATION
+# ============================================================================
+
+claude_code.configuration
+# Environment variables to use SnapLLM with Claude Code
+ANTHROPIC_BASE_URL http://localhost:6930
+ANTHROPIC_AUTH_TOKEN snapllm
+
+claude_code.usage
+# Run Claude Code with SnapLLM model
+command "claude --model medicine"
+
+claude_code.supported_features
+- messages_api
+- streaming
+- system_prompts
+- multi_turn_conversations
+- tool_calling
+- vision_input
+# Planned features:
+# - extended_thinking
+
+# ============================================================================
+# WEBSOCKET STREAMING
+# ============================================================================
+
+table.endpoints.websocket
+path method description
+/ws/stream GET "WebSocket streaming endpoint (upgrade required)"
+
+websocket.info
+protocol "RFC 6455 WebSocket"
+message_format ISON
+subprotocols [snapllm-stream]
+
+websocket.handshake.request
+headers {
+  Upgrade websocket
+  Connection Upgrade
+  Sec-WebSocket-Key "<base64-random-key>"
+  Sec-WebSocket-Version 13
+  Sec-WebSocket-Protocol "snapllm-stream"
+}
+
+websocket.handshake.response
+status 101
+headers {
+  Upgrade websocket
+  Connection Upgrade
+  Sec-WebSocket-Accept "<sha1-base64-hash>"
+  Sec-WebSocket-Protocol "snapllm-stream"
+}
+
+websocket.message_types
+# Client -> Server messages
+client.generate {
+  msg.type generate
+  msg.prompt "Hello, how are you?"
+  msg.max_tokens 100
+  msg.model medicine
+  msg.temperature 0.8
+}
+
+client.chat {
+  msg.type chat
+  msg.messages [{role user content "What is diabetes?"}]
+  msg.max_tokens 500
+  msg.model medicine
+}
+
+client.model_switch {
+  msg.type model_switch
+  msg.model legal
+}
+
+# Server -> Client messages
+server.stream_start {
+  msg.type stream_start
+  msg.model medicine
+  msg.request_id "req_abc123"
+}
+
+server.stream_token {
+  msg.type stream_token
+  msg.token "Hello"
+  msg.token_id 1234
+}
+
+server.stream_end {
+  msg.type stream_end
+  msg.total_tokens 150
+  msg.generation_time_ms 2500.5
+}
+
+server.error {
+  msg.type error
+  msg.error "Model not loaded"
+  msg.error_type not_found_error
+}
+
+websocket.example_flow
+1 "Client connects to ws://localhost:6930/ws/stream"
+2 "Client sends generate request in ISON format"
+3 "Server sends stream_start"
+4 "Server sends stream_token for each token"
+5 "Server sends stream_end with final stats"
+6 "Connection remains open for more requests"

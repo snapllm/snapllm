@@ -1,0 +1,19 @@
+services:
+  snapllm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SNAPLLM_CUDA: "OFF"
+        SNAPLLM_ENABLE_DIFFUSION: "ON"
+        SNAPLLM_ENABLE_MULTIMODAL: "ON"
+    ports:
+      - "127.0.0.1:6930:6930"
+    environment:
+      SNAPLLM_HOST: "0.0.0.0"
+      SNAPLLM_PORT: "6930"
+      SNAPLLM_WORKSPACE_ROOT: "/workspace"
+      SNAPLLM_MODELS_PATH: "/models"
+    volumes:
+      - ./workspace:/workspace
+      - ./models:/models

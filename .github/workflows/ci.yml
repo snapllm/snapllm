@@ -1,0 +1,101 @@
+﻿name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: >-
+          cmake -S . -B build_cpu -G "Visual Studio 17 2022" -A x64
+          -DSNAPLLM_CUDA=OFF
+          -DSNAPLLM_AVX2=ON
+          -DSNAPLLM_OPENMP=ON
+          -DSNAPLLM_ENABLE_DIFFUSION=ON
+          -DSNAPLLM_ENABLE_MULTIMODAL=ON
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build_cpu --config Release -j 2
+      - name: Smoke Test
+        run: >-
+          powershell -File scripts/ci_smoke_test.ps1
+          -SnapllmPath build_cpu\bin\snapllm.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: >-
+          cmake -S . -B build_cpu
+          -DSNAPLLM_CUDA=OFF
+          -DSNAPLLM_AVX2=ON
+          -DSNAPLLM_OPENMP=ON
+          -DSNAPLLM_ENABLE_DIFFUSION=ON
+          -DSNAPLLM_ENABLE_MULTIMODAL=ON
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build_cpu -j 2
+      - name: Smoke Test
+        run: |
+          chmod +x scripts/ci_smoke_test.sh
+          scripts/ci_smoke_test.sh build_cpu/bin/snapllm
+
+  desktop-app:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: desktop-app/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+
+  bindings-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: System Deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-dev
+      - name: Configure
+        run: >-
+          cmake -S . -B build_cpu
+          -DSNAPLLM_CUDA=OFF
+          -DSNAPLLM_AVX2=ON
+          -DSNAPLLM_OPENMP=ON
+          -DSNAPLLM_ENABLE_DIFFUSION=ON
+          -DSNAPLLM_ENABLE_MULTIMODAL=ON
+          -DSNAPLLM_ENABLE_PYTHON_BINDINGS=ON
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build_cpu -j 2
+      - name: Import Test
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'build_cpu/python')
+          import snapllm_bindings
+          print('bindings_ok')
+          PY
