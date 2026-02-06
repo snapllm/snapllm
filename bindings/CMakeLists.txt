@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # SnapLLM Python Bindings (pybind11)
 # =============================================================================
 
@@ -33,11 +33,19 @@ target_link_libraries(snapllm_bindings PRIVATE snapllm)
 
 # Ensure headers from snapllm are visible (propagated via target_link_libraries)
 
-# Output to a predictable location
+# Output to a predictable location — override both the base and per-config
+# properties so the module lands in python/ regardless of generator type.
 set_target_properties(snapllm_bindings PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/python
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/python
 )
+foreach(CFG Release Debug RelWithDebInfo MinSizeRel)
+    string(TOUPPER ${CFG} CFG_UPPER)
+    set_target_properties(snapllm_bindings PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY_${CFG_UPPER} ${CMAKE_BINARY_DIR}/python
+        RUNTIME_OUTPUT_DIRECTORY_${CFG_UPPER} ${CMAKE_BINARY_DIR}/python
+    )
+endforeach()
 
 message(STATUS "Python bindings output: ${CMAKE_BINARY_DIR}/python")
 message(STATUS "Python version: ${Python3_VERSION}")
