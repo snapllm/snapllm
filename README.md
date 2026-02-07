@@ -2,10 +2,10 @@
   <img src="logo_files/FULL_TRIMMED_transparent.png" alt="SnapLLM Logo" width="400"/>
 </p>
 
-<h1 align="center">Arxiv Paper Link to be added</h1>
+<h1 align="center">High-Performance Multi-Model LLM Inference Engine with Sub-Millisecond Model Switching, </br> Switch models in a snap! with Desktop UI, CLI & API</h1>
 
 <p align="center">
-  <strong>High-Performance Multi-Model LLM Inference Engine with Sub-Millisecond Model Switching</strong>
+  <strong>Arxiv Paper Link to be added</strong>
 </p>
 
 <p align="center">
@@ -32,9 +32,9 @@
 </p>
 
 <p align="center">
-  <em>Developed by</em><br/>
-  <a href="https://aroora.ai">
-    <img src="logo_files/AROORA_315x91.png" alt="AroorA AI Lab" width="200"/>
+  <em>Developed by Mahesh Vaikri</em><br/>
+  <a href="https://www.linkedin.com/company/aroora-ai-labs">
+    <img src="logo_files/AROORA_315x88.png" alt="AroorA AI Lab" width="200"/>
   </a>
 </p>
 
@@ -42,7 +42,7 @@
 
 ## What is SnapLLM?
 
-SnapLLM is a revolutionary LLM inference engine that enables **sub-millisecond model switching** between multiple loaded models. Unlike traditional approaches where switching models requires unloading and reloading (taking seconds to minutes), SnapLLM keeps multiple models hot in memory and switches between them in **<1ms**.
+SnapLLM is a LLM inference engine that enables **sub-millisecond model switching** between multiple loaded models. Unlike traditional approaches where switching models requires unloading and reloading (taking seconds to minutes), SnapLLM keeps multiple models hot in memory and switches between them in **<1ms**.
 
 ### The Problem
 
@@ -895,14 +895,14 @@ SnapLLM is built on the shoulders of giants:
 </p>
 
 <p align="center">
-  <a href="https://aroora.ai">
-    <img src="logo_files/AROORA_315x91.png" alt="AroorA AI Lab" width="180"/>
+  <a href="https://www.linkedin.com/company/aroora-ai-labs">
+    <img src="logo_files/AROORA_315x88.png" alt="AroorA AI Lab" width="180"/>
   </a>
 </p>
 
 <p align="center">
   Creator: Mahesh Vaikri <br/>
-  Developed by <strong>AroorA AI Lab</strong><br/>
+  Developed by <strong>AroorA AI Labs</strong><br/>
   Made with care for the AI community
 </p>
 
