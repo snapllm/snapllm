@@ -1,8 +1,19 @@
+<p align="center">
+  <img src="logo_files/FULL_TRIMMED_transparent.png" alt="SnapLLM Logo" width="400"/>
+</p>
+
+<h1 align="center">High-Performance Multi-Model LLM Inference Engine with Sub-Millisecond Model Switching, </br> Switch models in a snap! with Desktop UI, CLI & API</h1>
+
+<p align="center">
+  <strong>Arxiv Paper Link to be added</strong>
+</p>
+
+
 # SnapLLM Developer Guide
 
 <p align="center">
-  <a href="https://aroora.ai">
-    <img src="logo_files/AROORA_315x91.png" alt="AroorA AI Lab" width="180"/>
+  <a href="https://www.linkedin.com/company/aroora-ai-labs">
+    <img src="logo_files/AROORA_315x88.png" alt="AroorA AI Lab" width="180"/>
   </a>
 </p>
 

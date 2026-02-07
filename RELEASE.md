@@ -1,4 +1,14 @@
-﻿# Release Checklist (Public/Release-Grade)
+﻿<p align="center">
+  <img src="logo_files/FULL_TRIMMED_transparent.png" alt="SnapLLM Logo" width="400"/>
+</p>
+
+<h1 align="center">High-Performance Multi-Model LLM Inference Engine with Sub-Millisecond Model Switching, </br> Switch models in a snap! with Desktop UI, CLI & API</h1>
+
+<p align="center">
+  <strong>Arxiv Paper Link to be added</strong>
+</p>
+
+# Release Checklist (Public/Release-Grade)
 
 Use this checklist for tagged releases and public distributions.
 
