@@ -10,9 +10,7 @@
 </p>
 
 
-https://github.com/user-attachments/assets/4c06bcb8-cccd-478b-abbc-aa2d4c07db86
-
-
+<video src="https://github.com/user-attachments/assets/4c06bcb8-cccd-478b-abbc-aa2d4c07db86" autoplay loop muted playsinline width="800"></video>
 
 
 <p align="center">
