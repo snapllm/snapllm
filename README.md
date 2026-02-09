@@ -9,6 +9,10 @@
   <strong>🤩 Star this repository - It helps others discover SnapLLM 🤩</strong>
 </p>
 <video src="video/20260208_184422.mp4" controls width="800"></video>
+
+https://github.com/user-attachments/assets/0f478e3f-9bf5-487b-918a-7fc49968adf2
+
+
 <p align="center">
   <a href="#features">Features</a> |
   <a href="#installation">Installation</a> |
