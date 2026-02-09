@@ -610,6 +610,10 @@ npm run dev
 
 
 
+https://github.com/user-attachments/assets/d6d964f9-0883-407d-bb8a-d935501dbb9d
+
+
+
 - [SnapLLM Desktop App Demo (Vimeo)](https://vimeo.com/1157629276?fl=ip&fe=ec)
 - [SnapLLM Server and API Demo (Vimeo)](https://vimeo.com/1157624031?fl=ip&fe=ec)
 
