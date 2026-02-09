@@ -5,9 +5,10 @@
 <h1 align="center">High-Performance Multi-Model LLM Inference Engine with Sub-Millisecond Model Switching, </br> Switch models in a snap! with Desktop UI, CLI & API</h1>
 
 <p align="center">
-  <strong>Arxiv Paper Link to be added</strong>
+  <strong>Arxiv Paper Link to be added</strong></br>
+  <strong>🤩 Star this repository - It helps others discover SnapLLM 🤩</strong>
 </p>
-
+<video src="video/20260208_184422.mp4" controls width="800"></video>
 <p align="center">
   <a href="#features">Features</a> |
   <a href="#installation">Installation</a> |
@@ -35,14 +36,13 @@
   <em>Developed by Mahesh Vaikri</em><br/>
   <a href="https://www.linkedin.com/company/aroora-ai-labs">
     <img src="logo_files/AROORA_315x88.png" alt="AroorA AI Lab" width="200"/>
-  </a>
 </p>
 
 ---
 
 ## What is SnapLLM?
 
-SnapLLM is a LLM inference engine that enables **sub-millisecond model switching** between multiple loaded models. Unlike traditional approaches where switching models requires unloading and reloading (taking seconds to minutes), SnapLLM keeps multiple models hot in memory and switches between them in **<1ms**.
+SnapLLM is a LLM inference engine built on top of llama.cpp, stable-diffusion.cpp that enables **sub-millisecond model switching** between multiple loaded models. Unlike traditional approaches where switching models requires unloading and reloading (taking seconds to minutes), SnapLLM keeps multiple models hot in memory and switches between them in **<1ms**.
 
 ### The Problem
 
@@ -604,6 +604,8 @@ npm run dev
 
 ## Demo Videos
 
+
+
 - [SnapLLM Desktop App Demo (Vimeo)](https://vimeo.com/1157629276?fl=ip&fe=ec)
 - [SnapLLM Server and API Demo (Vimeo)](https://vimeo.com/1157624031?fl=ip&fe=ec)
 
@@ -899,7 +901,13 @@ SnapLLM is built on the shoulders of giants:
     <img src="logo_files/AROORA_315x88.png" alt="AroorA AI Lab" width="180"/>
   </a>
 </p>
-
+<p align="center">
+  </a>
+  Follow SnapLLM in LinkedIn <br/>
+    <a href="https://www.linkedin.com/company/snapllm">
+    <img src="logo_files/SnapLLM_Small_transparent_320x103.png" alt="SnapLLM LinkedIn" width="200"/>
+  </a>
+</p>
 <p align="center">
   Creator: Mahesh Vaikri <br/>
   Developed by <strong>AroorA AI Labs</strong><br/>
