@@ -8,9 +8,11 @@
   <strong>Arxiv Paper Link to be added</strong></br>
   <strong>🤩 Star this repository - It helps others discover SnapLLM 🤩</strong>
 </p>
-<video src="video/20260208_184422.mp4" controls width="800"></video>
 
-https://github.com/user-attachments/assets/0f478e3f-9bf5-487b-918a-7fc49968adf2
+
+https://github.com/user-attachments/assets/4c06bcb8-cccd-478b-abbc-aa2d4c07db86
+
+
 
 
 <p align="center">
