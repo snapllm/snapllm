@@ -34,7 +34,7 @@ import {
   List,
   Grid,
 } from 'lucide-react';
-import { listModels, generateBatch, BatchGenerateRequest, BatchGenerateResponse } from '../lib/api';
+import { listModels, generateBatch, BatchGenerateRequest, BatchGenerateResponse, BatchResultItem } from '../lib/api';
 import { Button, IconButton, Badge, Card, Toggle } from '../components/ui';
 import { MarkdownRenderer } from '../components/ui/MarkdownRenderer';
 
@@ -45,6 +45,7 @@ import { MarkdownRenderer } from '../components/ui/MarkdownRenderer';
 interface BatchItem {
   id: string;
   prompt: string;
+  systemPrompt?: string;
   status: 'pending' | 'processing' | 'completed' | 'error';
   result?: string;
   error?: string;
@@ -82,6 +83,7 @@ export default function BatchProcessing() {
   const [selectedModel, setSelectedModel] = useState('');
   const [maxTokens, setMaxTokens] = useState(256);
   const [temperature, setTemperature] = useState(0.7);
+  const [systemPrompt, setSystemPrompt] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -114,9 +116,11 @@ export default function BatchProcessing() {
         if (result) {
           return {
             ...item,
-            status: 'completed' as const,
-            result: result.generated_text,
-            generationTime: data.avg_time_per_prompt_s * 1000,
+            status: result.success ? 'completed' as const : 'error' as const,
+            result: result.success ? result.generated_text : undefined,
+            error: result.success ? undefined : (result.error || 'Generation failed'),
+            tokensGenerated: result.tokens_generated,
+            generationTime: result.latency_ms,
           };
         }
         return item;
@@ -162,21 +166,46 @@ export default function BatchProcessing() {
 
   // Run batch
   const runBatch = useCallback(() => {
-    const prompts = batchItems.map(item => item.prompt).filter(p => p.trim());
-    if (prompts.length === 0 || !selectedModel) return;
+    const activeItems = batchItems.filter(item => item.prompt.trim());
+    if (activeItems.length === 0 || !selectedModel) return;
 
     // Set all items to processing
     setBatchItems(prev => prev.map(item => ({
       ...item,
       status: item.prompt.trim() ? 'processing' : 'pending',
+      result: undefined,
+      error: undefined,
+      tokensGenerated: undefined,
+      generationTime: undefined,
     })));
 
-    batchMutation.mutate({
-      prompts,
-      max_tokens: maxTokens,
-      model: selectedModel,
+    // Build items with per-prompt system prompts and messages format
+    const items = activeItems.map(item => {
+      const itemSystemPrompt = item.systemPrompt || systemPrompt;
+      if (itemSystemPrompt) {
+        return {
+          messages: [
+            { role: 'system' as const, content: itemSystemPrompt },
+            { role: 'user' as const, content: item.prompt },
+          ],
+          max_tokens: maxTokens,
+          temperature,
+        };
+      }
+      return {
+        prompt: item.prompt,
+        max_tokens: maxTokens,
+        temperature,
+      };
     });
-  }, [batchItems, selectedModel, maxTokens, batchMutation]);
+
+    batchMutation.mutate({
+      items,
+      model: selectedModel,
+      max_tokens: maxTokens,
+      temperature,
+    });
+  }, [batchItems, selectedModel, maxTokens, temperature, systemPrompt, batchMutation]);
 
   // Copy result
   const copyResult = (id: string, text: string) => {
@@ -191,8 +220,10 @@ export default function BatchProcessing() {
       .filter(item => item.result)
       .map(item => ({
         prompt: item.prompt,
+        system_prompt: item.systemPrompt || systemPrompt || undefined,
         result: item.result,
-        generationTime: item.generationTime,
+        tokens_generated: item.tokensGenerated,
+        latency_ms: item.generationTime,
       }));
 
     const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
@@ -221,7 +252,7 @@ export default function BatchProcessing() {
             Batch Processing
           </h1>
           <p className="text-surface-500 mt-1">
-            Process multiple prompts simultaneously with optional tool calling
+            Process multiple prompts in parallel with custom system prompts
           </p>
         </div>
 
@@ -372,7 +403,13 @@ export default function BatchProcessing() {
                         Error
                       </Badge>
                     )}
-                    {item.generationTime && (
+                    {item.tokensGenerated != null && item.tokensGenerated > 0 && (
+                      <span className="text-xs text-surface-500 flex items-center gap-1">
+                        <Zap className="w-3 h-3" />
+                        {item.tokensGenerated} tok
+                      </span>
+                    )}
+                    {item.generationTime != null && item.generationTime > 0 && (
                       <span className="text-xs text-surface-500 flex items-center gap-1">
                         <Clock className="w-3 h-3" />
                         {item.generationTime.toFixed(0)}ms
@@ -500,6 +537,23 @@ export default function BatchProcessing() {
                     onChange={(e) => setTemperature(parseFloat(e.target.value))}
                     className="w-full accent-brand-500"
                   />
+                </div>
+
+                {/* System Prompt */}
+                <div className="mb-4">
+                  <label className="text-sm font-medium text-surface-700 dark:text-surface-300 mb-2 block">
+                    System Prompt
+                  </label>
+                  <textarea
+                    value={systemPrompt}
+                    onChange={(e) => setSystemPrompt(e.target.value)}
+                    placeholder="e.g. You are a classifier. Return valid JSON only."
+                    rows={3}
+                    className="w-full rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-900 px-3 py-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  />
+                  <p className="text-xs text-surface-500 mt-1">
+                    Applied to all items unless overridden per-item
+                  </p>
                 </div>
 
                 {/* Tool Calling */}

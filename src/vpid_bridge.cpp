@@ -1239,6 +1239,9 @@ std::string VPIDBridge::generate_text(
     int top_k,
     float repeat_penalty)
 {
+    // Acquire inference slot (blocks if max concurrent reached)
+    acquire_inference_slot();
+
     std::cout << "\n=== Phase 4: Token Generation with vPID Tensors ===" << std::endl;
     std::cout << "Model: " << model_name << std::endl;
     std::cout << "Prompt: \"" << prompt << "\"" << std::endl;
@@ -1248,6 +1251,7 @@ std::string VPIDBridge::generate_text(
     llama_context* ctx = create_inference_context(model_name, 4096, 512);
     if (!ctx) {
         std::cerr << "Failed to create inference context for generation" << std::endl;
+        release_inference_slot();
         return "";
     }
 
@@ -1263,6 +1267,7 @@ std::string VPIDBridge::generate_text(
 
     if (!model) {
         llama_free(ctx);
+        release_inference_slot();
         return "";
     }
 
@@ -1313,6 +1318,7 @@ std::string VPIDBridge::generate_text(
     if (llama_tokenize(vocab, formatted_prompt.c_str(), formatted_prompt.size(), tokens.data(), tokens.size(), true, true) < 0) {
         std::cerr << "Tokenization failed!" << std::endl;
         llama_free(ctx);
+        release_inference_slot();
         return "";
     }
 
@@ -1372,7 +1378,7 @@ std::string VPIDBridge::generate_text(
 
         llama_free(ctx);
 
-
+        release_inference_slot();
         return "";
 
 
@@ -1504,9 +1510,495 @@ std::string VPIDBridge::generate_text(
     llama_sampler_free(smpl);
     llama_free(ctx);
 
+    release_inference_slot();
     return result;
 }
 
+// =============================================================================
+// Parallel Batch Generation using llama.cpp Multi-Sequence API
+// =============================================================================
+
+namespace {
+
+// Internal per-sequence state for parallel batch processing
+struct SequenceState {
+    int seq_id = -1;
+    int prompt_index = -1;
+
+    std::vector<llama_token> tokens;  // Tokenized prompt
+    int n_prompt_tokens = 0;
+
+    int n_past = 0;       // Position counter
+    int n_decoded = 0;    // Tokens generated
+    int max_tokens = 512;
+    int32_t i_batch = -1; // Index into current batch for logit sampling
+    bool finished = false;
+
+    llama_sampler* smpl = nullptr;
+    std::string output;
+
+    ~SequenceState() {
+        if (smpl) {
+            llama_sampler_free(smpl);
+            smpl = nullptr;
+        }
+    }
+
+    // Non-copyable, movable
+    SequenceState() = default;
+    SequenceState(const SequenceState&) = delete;
+    SequenceState& operator=(const SequenceState&) = delete;
+    SequenceState(SequenceState&& o) noexcept
+        : seq_id(o.seq_id), prompt_index(o.prompt_index),
+          tokens(std::move(o.tokens)), n_prompt_tokens(o.n_prompt_tokens),
+          n_past(o.n_past), n_decoded(o.n_decoded), max_tokens(o.max_tokens),
+          i_batch(o.i_batch), finished(o.finished), smpl(o.smpl),
+          output(std::move(o.output)) {
+        o.smpl = nullptr;
+    }
+    SequenceState& operator=(SequenceState&& o) noexcept {
+        if (this != &o) {
+            if (smpl) llama_sampler_free(smpl);
+            seq_id = o.seq_id; prompt_index = o.prompt_index;
+            tokens = std::move(o.tokens); n_prompt_tokens = o.n_prompt_tokens;
+            n_past = o.n_past; n_decoded = o.n_decoded; max_tokens = o.max_tokens;
+            i_batch = o.i_batch; finished = o.finished;
+            smpl = o.smpl; o.smpl = nullptr;
+            output = std::move(o.output);
+        }
+        return *this;
+    }
+};
+
+static constexpr int MAX_PARALLEL_SEQUENCES = 8;
+
+} // anonymous namespace
+
+std::vector<BatchResult> VPIDBridge::generate_batch_parallel(
+    const std::string& model_name,
+    const std::vector<BatchPromptItem>& items,
+    float default_temp,
+    float default_top_p,
+    int default_top_k,
+    float default_repeat_penalty)
+{
+    // Acquire inference slot (blocks if max concurrent reached)
+    acquire_inference_slot();
+
+    auto total_start = std::chrono::high_resolution_clock::now();
+
+    const int n_items = static_cast<int>(items.size());
+    std::vector<BatchResult> all_results(n_items);
+
+    if (n_items == 0) { release_inference_slot(); return all_results; }
+
+    // Process in chunks of MAX_PARALLEL_SEQUENCES
+    for (int offset = 0; offset < n_items; offset += MAX_PARALLEL_SEQUENCES) {
+        int chunk_size = std::min(MAX_PARALLEL_SEQUENCES, n_items - offset);
+
+      try {
+        // ---- Phase 1: Setup ----
+        llama_model* model = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(models_mutex_);
+            auto it = loaded_models_.find(model_name);
+            if (it != loaded_models_.end()) {
+                model = it->second;
+            }
+        }
+
+        if (!model) {
+            for (int i = 0; i < chunk_size; i++) {
+                all_results[offset + i].success = false;
+                all_results[offset + i].error = "Model not loaded: " + model_name;
+            }
+            continue;
+        }
+
+        // Update access time
+        {
+            std::lock_guard<std::mutex> lock(models_mutex_);
+            model_access_times_[model_name] = std::chrono::steady_clock::now();
+        }
+
+        const llama_vocab* vocab = llama_model_get_vocab(model);
+        const char* chat_template = llama_model_chat_template(model, nullptr);
+
+        // ---- Phase 2: Tokenize all prompts ----
+        std::vector<SequenceState> seqs(chunk_size);
+        int total_prompt_tokens = 0;
+        int total_max_gen_tokens = 0;
+
+        for (int i = 0; i < chunk_size; i++) {
+            const auto& item = items[offset + i];
+            seqs[i].seq_id = i;
+            seqs[i].prompt_index = offset + i;
+            seqs[i].max_tokens = item.max_tokens;
+
+            // Format prompt with chat template
+            std::string formatted_prompt;
+            if (!item.messages.empty() && chat_template) {
+                // Use provided messages
+                std::vector<llama_chat_message> msgs;
+                for (const auto& m : item.messages) {
+                    msgs.push_back({ m.role.c_str(), m.content.c_str() });
+                }
+                std::vector<char> buf(4096);
+                int32_t tmpl_result = llama_chat_apply_template(
+                    chat_template, msgs.data(), static_cast<int32_t>(msgs.size()),
+                    true, buf.data(), static_cast<int32_t>(buf.size()));
+                if (tmpl_result > 0 && tmpl_result < (int32_t)buf.size()) {
+                    formatted_prompt = std::string(buf.data(), tmpl_result);
+                } else if (tmpl_result > (int32_t)buf.size()) {
+                    buf.resize(tmpl_result + 1);
+                    tmpl_result = llama_chat_apply_template(
+                        chat_template, msgs.data(), static_cast<int32_t>(msgs.size()),
+                        true, buf.data(), static_cast<int32_t>(buf.size()));
+                    if (tmpl_result > 0) formatted_prompt = std::string(buf.data(), tmpl_result);
+                    else formatted_prompt = item.raw_prompt.empty() ? item.messages.back().content : item.raw_prompt;
+                } else {
+                    formatted_prompt = item.raw_prompt.empty() ? item.messages.back().content : item.raw_prompt;
+                }
+            } else if (!item.raw_prompt.empty() && chat_template) {
+                // Raw prompt with system prompt
+                std::string sys = item.system_prompt.value_or(
+                    "You are a helpful AI assistant. Always respond in English.");
+                llama_chat_message msgs[] = {
+                    { "system", sys.c_str() },
+                    { "user", item.raw_prompt.c_str() }
+                };
+                std::vector<char> buf(item.raw_prompt.size() * 4 + 1024);
+                int32_t tmpl_result = llama_chat_apply_template(
+                    chat_template, msgs, 2, true, buf.data(), static_cast<int32_t>(buf.size()));
+                if (tmpl_result > 0 && tmpl_result < (int32_t)buf.size()) {
+                    formatted_prompt = std::string(buf.data(), tmpl_result);
+                } else {
+                    formatted_prompt = item.raw_prompt;
+                }
+            } else {
+                formatted_prompt = item.raw_prompt;
+                if (formatted_prompt.empty() && !item.messages.empty()) {
+                    formatted_prompt = item.messages.back().content;
+                }
+            }
+
+            if (formatted_prompt.empty()) {
+                seqs[i].finished = true;
+                all_results[offset + i].success = false;
+                all_results[offset + i].error = "Empty prompt";
+                continue;
+            }
+
+            // Tokenize
+            const int n_tok = -llama_tokenize(
+                vocab, formatted_prompt.c_str(), static_cast<int32_t>(formatted_prompt.size()),
+                NULL, 0, true, true);
+            if (n_tok <= 0) {
+                seqs[i].finished = true;
+                all_results[offset + i].success = false;
+                all_results[offset + i].error = "Tokenization failed";
+                continue;
+            }
+
+            seqs[i].tokens.resize(n_tok);
+            llama_tokenize(vocab, formatted_prompt.c_str(), static_cast<int32_t>(formatted_prompt.size()),
+                           seqs[i].tokens.data(), n_tok, true, true);
+            seqs[i].n_prompt_tokens = n_tok;
+
+            total_prompt_tokens += n_tok;
+            total_max_gen_tokens += item.max_tokens;
+        }
+
+        // Count active sequences
+        int n_active = 0;
+        for (int i = 0; i < chunk_size; i++) {
+            if (!seqs[i].finished) n_active++;
+        }
+        if (n_active == 0) continue;
+
+        // ---- Phase 3: Create context with multi-sequence support ----
+        int n_ctx = total_prompt_tokens + total_max_gen_tokens + 256;  // Extra headroom
+        n_ctx = std::max(n_ctx, 2048);
+        n_ctx = std::min(n_ctx, 32768);  // Cap to prevent OOM
+
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx = n_ctx;
+        ctx_params.n_batch = 512;
+        ctx_params.n_ubatch = 512;
+        ctx_params.n_seq_max = chunk_size;
+        ctx_params.n_threads = 8;
+        ctx_params.n_threads_batch = 8;
+        ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+        ctx_params.no_perf = false;
+
+        llama_context* ctx = llama_init_from_model(model, ctx_params);
+        if (!ctx) {
+            std::cerr << "[Batch] Failed to create multi-sequence context, falling back to sequential" << std::endl;
+            // Fallback: process sequentially
+            for (int i = 0; i < chunk_size; i++) {
+                if (seqs[i].finished) continue;
+                const auto& item = items[offset + i];
+                auto seq_start = std::chrono::high_resolution_clock::now();
+                std::string text = generate_text(model_name, item.raw_prompt.empty() ?
+                    (item.messages.empty() ? "" : item.messages.back().content) : item.raw_prompt,
+                    item.max_tokens, nullptr,
+                    item.temperature.value_or(default_temp),
+                    item.top_p.value_or(default_top_p),
+                    item.top_k.value_or(default_top_k),
+                    item.repeat_penalty.value_or(default_repeat_penalty));
+                auto seq_end = std::chrono::high_resolution_clock::now();
+                all_results[offset + i].generated_text = text;
+                all_results[offset + i].latency_ms = std::chrono::duration<double, std::milli>(seq_end - seq_start).count();
+            }
+            continue;
+        }
+
+        std::cout << "\n=== Parallel Batch Generation ===" << std::endl;
+        std::cout << "Sequences: " << n_active << ", Context: " << n_ctx
+                  << ", Total prompt tokens: " << total_prompt_tokens << std::endl;
+
+        // ---- Phase 4: Create per-sequence samplers ----
+        for (int s = 0; s < chunk_size; s++) {
+            if (seqs[s].finished) continue;
+
+            const auto& item = items[offset + s];
+            float temp = item.temperature.value_or(default_temp);
+            float tp = item.top_p.value_or(default_top_p);
+            int tk = item.top_k.value_or(default_top_k);
+            float rp = item.repeat_penalty.value_or(default_repeat_penalty);
+
+            auto sparams = llama_sampler_chain_default_params();
+            sparams.no_perf = false;
+            seqs[s].smpl = llama_sampler_chain_init(sparams);
+
+            llama_sampler_chain_add(seqs[s].smpl, llama_sampler_init_penalties(
+                seqs[s].max_tokens, rp, 0.0f, 0.0f));
+            llama_sampler_chain_add(seqs[s].smpl, llama_sampler_init_top_k(tk));
+            llama_sampler_chain_add(seqs[s].smpl, llama_sampler_init_top_p(tp, 1));
+            llama_sampler_chain_add(seqs[s].smpl, llama_sampler_init_min_p(0.05f, 1));
+            llama_sampler_chain_add(seqs[s].smpl, llama_sampler_init_temp(temp));
+            llama_sampler_chain_add(seqs[s].smpl, llama_sampler_init_dist(0));
+        }
+
+        // ---- Phase 5: Prefill all prompts with i_batch tracking ----
+        llama_batch batch = llama_batch_init(512, 0, 1);
+        llama_memory_t mem = llama_get_memory(ctx);
+        if (!mem) {
+            std::cerr << "[Batch] Failed to get memory handle from context" << std::endl;
+            llama_batch_free(batch);
+            llama_free(ctx);
+            for (int i = 0; i < chunk_size; i++) {
+                if (!seqs[i].finished) {
+                    all_results[offset + i].success = false;
+                    all_results[offset + i].error = "Failed to get memory handle";
+                }
+            }
+            continue;
+        }
+        bool prefill_ok = true;
+
+        for (int s = 0; s < chunk_size && prefill_ok; s++) {
+            if (seqs[s].finished) continue;
+
+            for (int t = 0; t < seqs[s].n_prompt_tokens; t++) {
+                batch.token[batch.n_tokens] = seqs[s].tokens[t];
+                batch.pos[batch.n_tokens] = t;
+                batch.n_seq_id[batch.n_tokens] = 1;
+                batch.seq_id[batch.n_tokens][0] = seqs[s].seq_id;
+
+                bool is_last = (t == seqs[s].n_prompt_tokens - 1);
+                batch.logits[batch.n_tokens] = is_last ? 1 : 0;
+
+                if (is_last) {
+                    seqs[s].i_batch = batch.n_tokens;  // Track logit position
+                }
+
+                batch.n_tokens++;
+
+                if (batch.n_tokens >= 512) {
+                    int ret = llama_decode(ctx, batch);
+                    if (ret != 0) {
+                        prefill_ok = false;
+                        break;
+                    }
+                    // If we flushed and a sequence's last token was in this batch,
+                    // we need to sample NOW before the next decode overwrites logits.
+                    // Check if any sequence's i_batch was in this batch range.
+                    for (int ss = 0; ss < chunk_size; ss++) {
+                        if (seqs[ss].finished) continue;
+                        if (seqs[ss].i_batch >= 0 && seqs[ss].i_batch < batch.n_tokens) {
+                            // Sample first token for this sequence now
+                            llama_token new_token = llama_sampler_sample(
+                                seqs[ss].smpl, ctx, seqs[ss].i_batch);
+
+                            if (llama_vocab_is_eog(vocab, new_token)) {
+                                seqs[ss].finished = true;
+                                llama_memory_seq_rm(mem, seqs[ss].seq_id, -1, -1);
+                            } else {
+                                char buf[128];
+                                int n_chars = llama_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
+                                if (n_chars > 0) seqs[ss].output.append(buf, n_chars);
+                                // Store token for next batch
+                                seqs[ss].tokens.clear();
+                                seqs[ss].tokens.push_back(new_token);
+                                seqs[ss].n_decoded++;
+                            }
+                            seqs[ss].i_batch = -1;  // Reset
+                        }
+                    }
+                    batch.n_tokens = 0;
+                }
+            }
+
+            seqs[s].n_past = seqs[s].n_prompt_tokens;
+        }
+
+        // Flush remaining
+        if (prefill_ok && batch.n_tokens > 0) {
+            int ret = llama_decode(ctx, batch);
+            if (ret != 0) {
+                prefill_ok = false;
+            } else {
+                // Sample first token for sequences whose last token is in this batch
+                for (int ss = 0; ss < chunk_size; ss++) {
+                    if (seqs[ss].finished) continue;
+                    if (seqs[ss].i_batch >= 0 && seqs[ss].i_batch < batch.n_tokens) {
+                        llama_token new_token = llama_sampler_sample(
+                            seqs[ss].smpl, ctx, seqs[ss].i_batch);
+
+                        if (llama_vocab_is_eog(vocab, new_token)) {
+                            seqs[ss].finished = true;
+                            llama_memory_seq_rm(mem, seqs[ss].seq_id, -1, -1);
+                        } else {
+                            char buf[128];
+                            int n_chars = llama_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
+                            if (n_chars > 0) seqs[ss].output.append(buf, n_chars);
+                            seqs[ss].tokens.clear();
+                            seqs[ss].tokens.push_back(new_token);
+                            seqs[ss].n_decoded++;
+                        }
+                        seqs[ss].i_batch = -1;
+                    }
+                }
+            }
+            batch.n_tokens = 0;
+        }
+
+        if (!prefill_ok) {
+            llama_batch_free(batch);
+            llama_free(ctx);
+            for (int i = 0; i < chunk_size; i++) {
+                if (!seqs[i].finished) {
+                    all_results[offset + i].success = false;
+                    all_results[offset + i].error = "Prefill decode failed";
+                }
+            }
+            continue;
+        }
+
+        // Now enter the main generation loop
+        // Each active sequence has its first generated token stored in seqs[s].tokens[0]
+        while (true) {
+            batch.n_tokens = 0;
+
+            for (int s = 0; s < chunk_size; s++) {
+                if (seqs[s].finished) continue;
+                if (seqs[s].tokens.empty()) continue;
+                if (seqs[s].n_decoded >= seqs[s].max_tokens) {
+                    seqs[s].finished = true;
+                    llama_memory_seq_rm(mem, seqs[s].seq_id, -1, -1);
+                    continue;
+                }
+
+                seqs[s].i_batch = batch.n_tokens;
+
+                batch.token[batch.n_tokens] = seqs[s].tokens[0];
+                batch.pos[batch.n_tokens] = seqs[s].n_past;
+                batch.n_seq_id[batch.n_tokens] = 1;
+                batch.seq_id[batch.n_tokens][0] = seqs[s].seq_id;
+                batch.logits[batch.n_tokens] = 1;
+                batch.n_tokens++;
+
+                seqs[s].n_past++;
+            }
+
+            if (batch.n_tokens == 0) break;  // All done
+
+            int ret = llama_decode(ctx, batch);
+            if (ret != 0) {
+                std::cerr << "[Batch] Generation decode failed (ret=" << ret << ")" << std::endl;
+                break;
+            }
+
+            // Sample next token for each active sequence
+            for (int s = 0; s < chunk_size; s++) {
+                if (seqs[s].finished || seqs[s].i_batch < 0) continue;
+
+                llama_token new_token = llama_sampler_sample(
+                    seqs[s].smpl, ctx, seqs[s].i_batch);
+
+                if (llama_vocab_is_eog(vocab, new_token) || seqs[s].n_decoded >= seqs[s].max_tokens) {
+                    seqs[s].finished = true;
+                    llama_memory_seq_rm(mem, seqs[s].seq_id, -1, -1);
+                    continue;
+                }
+
+                char buf[128];
+                int n_chars = llama_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
+                if (n_chars > 0) seqs[s].output.append(buf, n_chars);
+
+                seqs[s].tokens.clear();
+                seqs[s].tokens.push_back(new_token);
+                seqs[s].n_decoded++;
+            }
+        }
+
+        // ---- Phase 7: Collect results ----
+        auto chunk_end = std::chrono::high_resolution_clock::now();
+        double chunk_time_ms = std::chrono::duration<double, std::milli>(chunk_end - total_start).count();
+
+        for (int s = 0; s < chunk_size; s++) {
+            int idx = offset + s;
+            if (all_results[idx].success) {
+                all_results[idx].generated_text = seqs[s].output;
+                all_results[idx].tokens_generated = seqs[s].n_decoded;
+                all_results[idx].latency_ms = chunk_time_ms;
+            }
+        }
+
+        std::cout << "[Batch] Chunk complete: " << n_active << " sequences, "
+                  << chunk_time_ms << "ms total" << std::endl;
+
+        // Cleanup
+        llama_batch_free(batch);
+        llama_free(ctx);
+
+      } catch (const std::exception& e) {
+        std::cerr << "[Batch] Exception in chunk processing: " << e.what() << std::endl;
+        for (int i = 0; i < chunk_size; i++) {
+            if (all_results[offset + i].success && all_results[offset + i].generated_text.empty()) {
+                all_results[offset + i].success = false;
+                all_results[offset + i].error = std::string("Batch exception: ") + e.what();
+            }
+        }
+      } catch (...) {
+        std::cerr << "[Batch] Unknown exception in chunk processing" << std::endl;
+        for (int i = 0; i < chunk_size; i++) {
+            if (all_results[offset + i].success && all_results[offset + i].generated_text.empty()) {
+                all_results[offset + i].success = false;
+                all_results[offset + i].error = "Unknown batch processing error";
+            }
+        }
+      }
+    }
+
+    auto total_end = std::chrono::high_resolution_clock::now();
+    double total_ms = std::chrono::duration<double, std::milli>(total_end - total_start).count();
+    std::cout << "[Batch] All " << n_items << " prompts complete in " << total_ms << "ms" << std::endl;
+
+    release_inference_slot();
+    return all_results;
+}
 
 size_t VPIDBridge::generate_text_streaming(
     const std::string& model_name,
@@ -1518,10 +2010,14 @@ size_t VPIDBridge::generate_text_streaming(
     int top_k,
     float repeat_penalty)
 {
+    // Acquire inference slot (blocks if max concurrent reached)
+    acquire_inference_slot();
+
     // Create inference context
     llama_context* ctx = create_inference_context(model_name, 4096, 512);
     if (!ctx) {
         std::cerr << "Failed to create inference context for streaming" << std::endl;
+        release_inference_slot();
         callback("", -1, true);  // Signal error
         return 0;
     }
@@ -1538,6 +2034,7 @@ size_t VPIDBridge::generate_text_streaming(
 
     if (!model) {
         llama_free(ctx);
+        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -1570,6 +2067,7 @@ size_t VPIDBridge::generate_text_streaming(
     if (llama_tokenize(vocab, formatted_prompt.c_str(), formatted_prompt.size(),
                        tokens.data(), tokens.size(), true, true) < 0) {
         llama_free(ctx);
+        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -1606,6 +2104,7 @@ size_t VPIDBridge::generate_text_streaming(
 
     if (prefill_failed) {
         llama_free(ctx);
+        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -1660,6 +2159,7 @@ size_t VPIDBridge::generate_text_streaming(
     llama_sampler_free(smpl);
     llama_free(ctx);
 
+    release_inference_slot();
     return n_gen;
 }
 
@@ -1674,6 +2174,9 @@ std::string VPIDBridge::generate_with_injected_kv(
     int top_k,
     float repeat_penalty)
 {
+    // Acquire inference slot (blocks if max concurrent reached)
+    acquire_inference_slot();
+
     std::cout << "\n[vPID L2] generate_with_injected_kv starting..." << std::endl;
     std::cout << "  Model: " << model_name << std::endl;
     std::cout << "  Context tokens (from KV cache): " << context_token_count << std::endl;
@@ -1681,6 +2184,7 @@ std::string VPIDBridge::generate_with_injected_kv(
 
     if (!ctx) {
         std::cerr << "[vPID L2] Error: Context is null" << std::endl;
+        release_inference_slot();
         return "";
     }
 
@@ -1696,12 +2200,14 @@ std::string VPIDBridge::generate_with_injected_kv(
 
     if (!model) {
         std::cerr << "[vPID L2] Error: Model not found: " << model_name << std::endl;
+        release_inference_slot();
         return "";
     }
 
     const llama_vocab* vocab = llama_model_get_vocab(model);
     if (!vocab) {
         std::cerr << "[vPID L2] Error: Could not get vocabulary" << std::endl;
+        release_inference_slot();
         return "";
     }
 
@@ -1745,6 +2251,7 @@ std::string VPIDBridge::generate_with_injected_kv(
 
     if (n_query_tokens < 0) {
         std::cerr << "[vPID L2] Error: Failed to tokenize query" << std::endl;
+        release_inference_slot();
         return "";
     }
     query_tokens.resize(n_query_tokens);
@@ -1779,6 +2286,7 @@ std::string VPIDBridge::generate_with_injected_kv(
         if (llama_decode(ctx, batch) != 0) {
             std::cerr << "[vPID L2] Error: Failed to decode query tokens at position " << n_processed << std::endl;
             llama_batch_free(batch);
+            release_inference_slot();
             return "";
         }
         llama_batch_free(batch);
@@ -1853,6 +2361,7 @@ std::string VPIDBridge::generate_with_injected_kv(
     // Cleanup sampler (NOTE: caller manages context lifecycle)
     llama_sampler_free(smpl);
 
+    release_inference_slot();
     return result;
 }
 
@@ -1868,6 +2377,9 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
     int top_k,
     float repeat_penalty)
 {
+    // Acquire inference slot (blocks if max concurrent reached)
+    acquire_inference_slot();
+
     std::cout << "\n[vPID L2 Streaming] Starting with injected KV cache..." << std::endl;
     std::cout << "  Model: " << model_name << std::endl;
     std::cout << "  Context tokens (from KV cache): " << context_token_count << std::endl;
@@ -1875,6 +2387,7 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
 
     if (!ctx) {
         std::cerr << "[vPID L2 Streaming] Error: Context is null" << std::endl;
+        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -1891,6 +2404,7 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
 
     if (!model) {
         std::cerr << "[vPID L2 Streaming] Error: Model not found: " << model_name << std::endl;
+        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -1898,6 +2412,7 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
     const llama_vocab* vocab = llama_model_get_vocab(model);
     if (!vocab) {
         std::cerr << "[vPID L2 Streaming] Error: Could not get vocabulary" << std::endl;
+        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -1942,6 +2457,7 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
 
     if (n_query_tokens < 0) {
         std::cerr << "[vPID L2 Streaming] Error: Failed to tokenize query" << std::endl;
+        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -1975,6 +2491,7 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
         if (llama_decode(ctx, batch) != 0) {
             std::cerr << "[vPID L2 Streaming] Error: Failed to decode query tokens" << std::endl;
             llama_batch_free(batch);
+            release_inference_slot();
             callback("", -1, true);
             return 0;
         }
@@ -2039,6 +2556,7 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
     // Cleanup sampler (NOTE: caller manages context lifecycle)
     llama_sampler_free(smpl);
 
+    release_inference_slot();
     return n_gen;
 }
 
@@ -2049,6 +2567,33 @@ void VPIDBridge::enable_validation(bool enabled) {
     } else {
         std::cout << "[VALIDATION] Disabled - skipping tensor validation" << std::endl;
     }
+}
+
+// =============================================================================
+// Inference Concurrency Control
+// =============================================================================
+
+void VPIDBridge::set_max_concurrent_inferences(int max_concurrent) {
+    std::lock_guard<std::mutex> lock(inference_mutex_);
+    max_concurrent_inferences_ = std::max(1, max_concurrent);
+    std::cout << "[SnapLLM] Max concurrent inferences set to " << max_concurrent_inferences_ << std::endl;
+    inference_cv_.notify_all();
+}
+
+void VPIDBridge::acquire_inference_slot() {
+    std::unique_lock<std::mutex> lock(inference_mutex_);
+    inference_cv_.wait(lock, [this] {
+        return active_inferences_ < max_concurrent_inferences_;
+    });
+    active_inferences_++;
+}
+
+void VPIDBridge::release_inference_slot() {
+    {
+        std::lock_guard<std::mutex> lock(inference_mutex_);
+        active_inferences_--;
+    }
+    inference_cv_.notify_one();
 }
 
 void VPIDBridge::set_validation_config(const ValidationConfig& config) {

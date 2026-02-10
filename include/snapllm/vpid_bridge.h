@@ -20,6 +20,7 @@
 #include <optional>
 #include <unordered_map>
 #include <mutex>
+#include <condition_variable>
 #include <functional>
 
 // Token streaming callback type
@@ -61,6 +62,39 @@ struct ggml_tensor;
 struct ggml_context;
 
 namespace snapllm {
+
+/**
+ * @brief Chat message data for batch processing
+ */
+struct ChatMessageData {
+    std::string role;
+    std::string content;
+};
+
+/**
+ * @brief Per-prompt configuration for parallel batch processing
+ */
+struct BatchPromptItem {
+    std::string raw_prompt;                        ///< Raw text prompt (backward compat)
+    std::vector<ChatMessageData> messages;          ///< Chat messages [{role, content}]
+    std::optional<std::string> system_prompt;       ///< Override default system prompt
+    int max_tokens = 512;
+    std::optional<float> temperature;
+    std::optional<float> top_p;
+    std::optional<int> top_k;
+    std::optional<float> repeat_penalty;
+};
+
+/**
+ * @brief Per-prompt result from parallel batch processing
+ */
+struct BatchResult {
+    std::string generated_text;
+    size_t tokens_generated = 0;
+    double latency_ms = 0.0;
+    bool success = true;
+    std::string error;
+};
 
 /**
  * @class VPIDBridge
@@ -189,6 +223,12 @@ public:
     void enable_validation(bool enabled);
 
     /**
+     * @brief Set max concurrent inference requests (default: 1 for GPU safety)
+     * @param max_concurrent Maximum number of simultaneous inference operations
+     */
+    void set_max_concurrent_inferences(int max_concurrent);
+
+    /**
      * @brief Configure validation settings
      * @param config Validation configuration
      */
@@ -298,6 +338,29 @@ public:
     );
 
     /**
+     * @brief Generate text for multiple prompts in parallel using multi-sequence batch decoding
+     *
+     * Uses a single llama_context with multiple sequence IDs to process
+     * all prompts concurrently. Each sequence gets independent sampling.
+     *
+     * @param model_name     Model to use
+     * @param items          Vector of batch prompt items
+     * @param default_temp   Default temperature if not overridden per-prompt
+     * @param default_top_p  Default top_p if not overridden per-prompt
+     * @param default_top_k  Default top_k if not overridden per-prompt
+     * @param default_repeat Default repeat_penalty if not overridden per-prompt
+     * @return Vector of results, one per input prompt (same order)
+     */
+    std::vector<BatchResult> generate_batch_parallel(
+        const std::string& model_name,
+        const std::vector<BatchPromptItem>& items,
+        float default_temp = 0.8f,
+        float default_top_p = 0.95f,
+        int default_top_k = 40,
+        float default_repeat_penalty = 1.1f
+    );
+
+    /**
      * @brief Generate text using pre-injected KV cache (vPID L2)
      *
      * This method generates text after KV cache has been injected via
@@ -390,6 +453,17 @@ private:
         std::chrono::steady_clock::time_point cached_time;
     };
     std::unordered_map<std::string, RAMCacheEntry> ram_cache_;  // model_name -> cache entry
+
+    // Inference concurrency control - prevents GPU OOM from concurrent contexts
+    // Only max_concurrent_inferences_ requests can run inference simultaneously;
+    // additional requests block until a slot opens.
+    mutable std::mutex inference_mutex_;
+    std::condition_variable inference_cv_;
+    int active_inferences_ = 0;
+    int max_concurrent_inferences_ = 1;  // Default: serialize GPU inference
+
+    void acquire_inference_slot();
+    void release_inference_slot();
 
     // Static flag for llama.cpp backend - only init once across all instances
     static bool backend_initialized_;

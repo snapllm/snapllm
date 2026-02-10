@@ -49,6 +49,7 @@
 #include <vector>
 #include <unordered_map>
 #include <mutex>
+#include <condition_variable>
 
 // Forward declarations
 namespace httplib {
@@ -71,7 +72,7 @@ struct ServerConfig {
     std::string config_path = "";            ///< Config file path (auto-resolved if empty)
     bool cors_enabled = true;                ///< Enable CORS for browser access
     int timeout_seconds = 600;               ///< Request timeout
-    int max_concurrent_requests = 8;         ///< Max concurrent requests (future use)
+    int max_concurrent_requests = 8;         ///< Max concurrent requests (capped to 2 for GPU inference)
     int max_models = 10;                     ///< UI default: max models allowed
     int default_ram_budget_mb = 16384;       ///< UI default RAM budget
     std::string default_strategy = "balanced"; ///< UI default strategy
@@ -158,6 +159,18 @@ private:
     std::atomic<uint64_t> total_requests_{0};
     std::atomic<uint64_t> total_tokens_{0};
     std::atomic<uint64_t> total_errors_{0};
+
+    // HTTP-level inference gate: prevents concurrent inference from crashing GPU
+    // Requests exceeding the limit get queued briefly, then rejected with 503
+    std::mutex inference_gate_mutex_;
+    std::condition_variable inference_gate_cv_;
+    int active_inference_count_ = 0;
+    int max_active_inferences_ = 1;  // Default: serialize all GPU inference
+    bool acquire_inference_gate(int timeout_ms = 30000);
+    void release_inference_gate();
+
+    // Model switching mutex: prevents concurrent model switches from racing
+    std::mutex model_switch_mutex_;
 
     struct ModelRuntimeMetrics {
         uint64_t requests = 0;

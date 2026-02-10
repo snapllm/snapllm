@@ -131,23 +131,51 @@ std::string ModelManager::generate(const std::string& prompt, size_t max_tokens,
 }
 
 std::vector<std::string> ModelManager::generate_batch(const std::vector<std::string>& prompts, size_t max_tokens) {
+    // Convert to BatchPromptItem and use parallel processing
+    std::vector<BatchPromptItem> items;
+    items.reserve(prompts.size());
+    for (const auto& prompt : prompts) {
+        BatchPromptItem item;
+        item.raw_prompt = prompt;
+        item.max_tokens = static_cast<int>(max_tokens);
+        items.push_back(std::move(item));
+    }
+
+    auto batch_results = generate_batch(items);
+
     std::vector<std::string> results;
     results.reserve(prompts.size());
+    for (const auto& br : batch_results) {
+        results.push_back(br.success ? br.generated_text : ("Error: " + br.error));
+    }
+    return results;
+}
 
+std::vector<BatchResult> ModelManager::generate_batch(
+    const std::vector<BatchPromptItem>& items,
+    float default_temp, float default_top_p,
+    int default_top_k, float default_repeat_penalty)
+{
     if (current_model_.empty()) {
-        for (size_t i = 0; i < prompts.size(); ++i) {
-            results.push_back("Error: No model selected");
+        std::vector<BatchResult> results(items.size());
+        for (auto& r : results) {
+            r.success = false;
+            r.error = "No model selected";
         }
         return results;
     }
 
-    // Process each prompt sequentially for now
-    // TODO: Implement true parallel batch processing with llama.cpp multi-sequence API
-    for (const auto& prompt : prompts) {
-        results.push_back(bridge_->generate_text(current_model_, prompt, static_cast<int>(max_tokens)));
+    if (!ensure_model_in_gpu(current_model_)) {
+        std::vector<BatchResult> results(items.size());
+        for (auto& r : results) {
+            r.success = false;
+            r.error = "Could not load model to GPU: " + current_model_;
+        }
+        return results;
     }
 
-    return results;
+    return bridge_->generate_batch_parallel(
+        current_model_, items, default_temp, default_top_p, default_top_k, default_repeat_penalty);
 }
 
 std::string ModelManager::run_inference_from_cache(const std::string& model_name,

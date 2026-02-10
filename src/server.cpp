@@ -10,11 +10,15 @@
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576  // 1MB
 #define CPPHTTPLIB_LISTEN_BACKLOG 512
 #define CPPHTTPLIB_TCP_NODELAY true
+#define CPPHTTPLIB_THREAD_POOL_COUNT 8  // Cap HTTP threads (inference serialized by semaphore)
 
 // Windows socket headers need to come before httplib on Windows
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -187,7 +191,7 @@ static bool write_config_file(const std::string& path, const json& payload, std:
 // Constants
 static constexpr const char* MIMETYPE_JSON = "application/json; charset=utf-8";
 static constexpr const char* MIMETYPE_SSE = "text/event-stream";
-static constexpr const char* SNAPLLM_VERSION = "1.0.0";
+static constexpr const char* SNAPLLM_VERSION = "1.1.0";
 
 // Shared DiffusionBridge instance (initialized lazily)
 #ifdef SNAPLLM_HAS_DIFFUSION
@@ -320,6 +324,18 @@ SnapLLMServer::SnapLLMServer(const ServerConfig& config)
     // Initialize context manager (vPID L2)
     context_manager_ = std::make_unique<ContextManager>(manager_.get(), workspace_paths_);
 
+    // Configure inference concurrency limits
+    // HTTP-level gate: only 1 inference at a time for GPU safety
+    // This prevents GPU OOM by blocking at the HTTP handler level
+    // BEFORE any llama_context allocation or model switching occurs
+    max_active_inferences_ = 1;  // Serialize GPU inference completely
+    std::cout << "[SnapLLM] HTTP inference gate: max " << max_active_inferences_ << " concurrent" << std::endl;
+
+    // Also configure VPIDBridge-level semaphore as a safety net
+    if (auto bridge = manager_->get_bridge()) {
+        bridge->set_max_concurrent_inferences(1);
+    }
+
     setup_middleware();
     setup_routes();
 }
@@ -327,6 +343,52 @@ SnapLLMServer::SnapLLMServer(const ServerConfig& config)
 SnapLLMServer::~SnapLLMServer() {
     stop();
 }
+
+// ============================================================================
+// Inference Gate: HTTP-level concurrency control
+// Prevents GPU OOM by limiting how many requests enter inference simultaneously.
+// Requests that can't acquire a slot within timeout get HTTP 503.
+// ============================================================================
+
+bool SnapLLMServer::acquire_inference_gate(int timeout_ms) {
+    std::unique_lock<std::mutex> lock(inference_gate_mutex_);
+    bool acquired = inference_gate_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this] {
+        return active_inference_count_ < max_active_inferences_;
+    });
+    if (acquired) {
+        active_inference_count_++;
+        std::cout << "[SnapLLM Gate] Acquired inference slot (" << active_inference_count_
+                  << "/" << max_active_inferences_ << " active)" << std::endl;
+    }
+    return acquired;
+}
+
+void SnapLLMServer::release_inference_gate() {
+    {
+        std::lock_guard<std::mutex> lock(inference_gate_mutex_);
+        active_inference_count_--;
+        std::cout << "[SnapLLM Gate] Released inference slot (" << active_inference_count_
+                  << "/" << max_active_inferences_ << " active)" << std::endl;
+    }
+    inference_gate_cv_.notify_one();
+}
+
+// RAII guard for inference gate - ensures release on all exit paths
+namespace {
+class InferenceGateGuard {
+    SnapLLMServer* server_;
+    bool acquired_;
+    std::function<void()> release_fn_;
+public:
+    InferenceGateGuard(bool acquired, std::function<void()> release_fn)
+        : acquired_(acquired), release_fn_(std::move(release_fn)) {}
+    ~InferenceGateGuard() { if (acquired_) release_fn_(); }
+    bool acquired() const { return acquired_; }
+    // Prevent double-release
+    InferenceGateGuard(const InferenceGateGuard&) = delete;
+    InferenceGateGuard& operator=(const InferenceGateGuard&) = delete;
+};
+} // anonymous namespace
 
 void SnapLLMServer::record_model_metrics(const std::string& model_id,
                                          uint64_t tokens_generated,
@@ -960,6 +1022,16 @@ void SnapLLMServer::handle_models_extended(const httplib::Request& req, httplib:
 
 void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib::Response& res) {
     total_requests_++;
+
+    // === INFERENCE GATE: Acquire slot before ANY model/GPU operations ===
+    if (!acquire_inference_gate(30000)) {
+        total_errors_++;
+        send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
+                   "server_busy", 503);
+        return;
+    }
+    InferenceGateGuard gate_guard(true, [this]() { release_inference_gate(); });
+
     try {
         json body = json::parse(req.body);
 
@@ -987,8 +1059,9 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
             return;
         }
 
-        // Switch model if needed (vPID L1)
+        // Switch model if needed (vPID L1) - protected by mutex
         if (!model.empty() && model != manager_->get_current_model()) {
+            std::lock_guard<std::mutex> switch_lock(model_switch_mutex_);
             if (!manager_->switch_model(model)) {
                 send_error(res, "Model not loaded: " + model, "model_not_found", 404);
                 return;
@@ -1324,6 +1397,23 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
 
 void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Response& res) {
     total_requests_++;
+
+    // === INFERENCE GATE: Acquire slot before ANY model/GPU operations ===
+    if (!acquire_inference_gate(30000)) {
+        total_errors_++;
+        json error = {
+            {"type", "error"},
+            {"error", {
+                {"type", "overloaded_error"},
+                {"message", "Server busy - too many concurrent inference requests. Please retry."}
+            }}
+        };
+        res.status = 529;  // Anthropic overloaded status
+        res.set_content(error.dump(), MIMETYPE_JSON);
+        return;
+    }
+    InferenceGateGuard gate_guard(true, [this]() { release_inference_gate(); });
+
     try {
         json body = json::parse(req.body);
 
@@ -1467,8 +1557,9 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
             return;
         }
 
-        // Switch model if needed
+        // Switch model if needed - protected by mutex
         if (!model.empty() && model != manager_->get_current_model()) {
+            std::lock_guard<std::mutex> switch_lock(model_switch_mutex_);
             if (!manager_->switch_model(model)) {
                 // Try to find a partial match
                 auto models = manager_->get_loaded_models();
@@ -2190,7 +2281,11 @@ void SnapLLMServer::handle_switch_model(const httplib::Request& req, httplib::Re
         }
 
         auto start_time = std::chrono::high_resolution_clock::now();
-        bool success = manager_->switch_model(name);
+        bool success;
+        {
+            std::lock_guard<std::mutex> switch_lock(model_switch_mutex_);
+            success = manager_->switch_model(name);
+        }
         auto end_time = std::chrono::high_resolution_clock::now();
 
         double switch_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
@@ -2579,6 +2674,16 @@ void SnapLLMServer::handle_server_metrics(const httplib::Request&, httplib::Resp
 
 void SnapLLMServer::handle_generate(const httplib::Request& req, httplib::Response& res) {
     total_requests_++;
+
+    // === INFERENCE GATE ===
+    if (!acquire_inference_gate(30000)) {
+        total_errors_++;
+        send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
+                   "server_busy", 503);
+        return;
+    }
+    InferenceGateGuard gate_guard(true, [this]() { release_inference_gate(); });
+
     try {
         json body = json::parse(req.body);
 
@@ -2595,8 +2700,9 @@ void SnapLLMServer::handle_generate(const httplib::Request& req, httplib::Respon
         int top_k = body.value("top_k", 40);
         float repeat_penalty = body.value("repeat_penalty", 1.1f);
 
-        // Switch model if needed
+        // Switch model if needed - protected by mutex
         if (!model.empty() && model != manager_->get_current_model()) {
+            std::lock_guard<std::mutex> switch_lock(model_switch_mutex_);
             if (!manager_->switch_model(model)) {
                 send_error(res, "Model not loaded: " + model, "model_not_found", 404);
                 return;
@@ -2646,29 +2752,82 @@ void SnapLLMServer::handle_generate(const httplib::Request& req, httplib::Respon
 }
 
 void SnapLLMServer::handle_generate_batch(const httplib::Request& req, httplib::Response& res) {
+    total_requests_++;
+
+    // === INFERENCE GATE ===
+    if (!acquire_inference_gate(60000)) {  // 60s timeout for batch
+        total_errors_++;
+        send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
+                   "server_busy", 503);
+        return;
+    }
+    InferenceGateGuard gate_guard(true, [this]() { release_inference_gate(); });
+
     try {
         json body = json::parse(req.body);
 
-        if (!body.contains("prompts") || !body["prompts"].is_array()) {
-            send_error(res, "Missing 'prompts' array in request body");
-            return;
-        }
-
-        std::vector<std::string> prompts;
-        for (const auto& p : body["prompts"]) {
-            prompts.push_back(p.get<std::string>());
-        }
-
-        if (prompts.empty()) {
-            send_error(res, "Empty 'prompts' array");
-            return;
-        }
-
+        // Parse global defaults
         std::string model = body.value("model", manager_->get_current_model());
-        int max_tokens = body.value("max_tokens", 512);
+        int default_max_tokens = body.value("max_tokens", 512);
+        float default_temp = body.value("temperature", 0.8f);
+        float default_top_p = body.value("top_p", 0.95f);
+        int default_top_k = body.value("top_k", 40);
+        float default_repeat = body.value("repeat_penalty", 1.1f);
 
-        // Switch model if needed
+        // Build BatchPromptItem list from either "items" (new) or "prompts" (legacy) format
+        std::vector<snapllm::BatchPromptItem> items;
+
+        if (body.contains("items") && body["items"].is_array()) {
+            // New rich format with per-prompt messages and parameters
+            for (const auto& item_json : body["items"]) {
+                snapllm::BatchPromptItem item;
+
+                if (item_json.contains("messages") && item_json["messages"].is_array()) {
+                    for (const auto& msg : item_json["messages"]) {
+                        item.messages.push_back({
+                            msg.value("role", "user"),
+                            msg.value("content", "")
+                        });
+                    }
+                } else if (item_json.contains("prompt")) {
+                    item.raw_prompt = item_json.value("prompt", "");
+                }
+
+                item.max_tokens = item_json.value("max_tokens", default_max_tokens);
+                if (item_json.contains("temperature"))
+                    item.temperature = item_json.value("temperature", 0.8f);
+                if (item_json.contains("top_p"))
+                    item.top_p = item_json.value("top_p", 0.95f);
+                if (item_json.contains("top_k"))
+                    item.top_k = item_json.value("top_k", 40);
+                if (item_json.contains("repeat_penalty"))
+                    item.repeat_penalty = item_json.value("repeat_penalty", 1.1f);
+                if (item_json.contains("system_prompt"))
+                    item.system_prompt = item_json.value("system_prompt", "");
+
+                items.push_back(std::move(item));
+            }
+        } else if (body.contains("prompts") && body["prompts"].is_array()) {
+            // Legacy format: simple string array
+            for (const auto& p : body["prompts"]) {
+                snapllm::BatchPromptItem item;
+                item.raw_prompt = p.get<std::string>();
+                item.max_tokens = default_max_tokens;
+                items.push_back(std::move(item));
+            }
+        } else {
+            send_error(res, "Missing 'items' or 'prompts' array in request body");
+            return;
+        }
+
+        if (items.empty()) {
+            send_error(res, "Empty batch request");
+            return;
+        }
+
+        // Switch model if needed - protected by mutex
         if (!model.empty() && model != manager_->get_current_model()) {
+            std::lock_guard<std::mutex> switch_lock(model_switch_mutex_);
             if (!manager_->switch_model(model)) {
                 send_error(res, "Model not loaded: " + model, "model_not_found", 404);
                 return;
@@ -2683,41 +2842,61 @@ void SnapLLMServer::handle_generate_batch(const httplib::Request& req, httplib::
 
         auto start_time = std::chrono::high_resolution_clock::now();
 
-        std::vector<std::string> results = manager_->generate_batch(prompts, static_cast<size_t>(max_tokens));
+        // Use parallel batch processing
+        std::vector<snapllm::BatchResult> results = manager_->generate_batch(
+            items, default_temp, default_top_p, default_top_k, default_repeat);
 
         auto end_time = std::chrono::high_resolution_clock::now();
         double total_time = std::chrono::duration<double>(end_time - start_time).count();
 
+        // Build response
         json results_array = json::array();
         int successful = 0;
         int total_generated_tokens = 0;
-        for (size_t i = 0; i < prompts.size() && i < results.size(); ++i) {
-            results_array.push_back({
-                {"prompt", prompts[i]},
-                {"generated_text", results[i]}
-            });
-            if (!results[i].empty()) {
+        for (size_t i = 0; i < results.size(); ++i) {
+            json result_obj = {
+                {"index", static_cast<int>(i)},
+                {"generated_text", results[i].generated_text},
+                {"tokens_generated", static_cast<int>(results[i].tokens_generated)},
+                {"latency_ms", results[i].latency_ms},
+                {"success", results[i].success}
+            };
+            if (!results[i].success) {
+                result_obj["error"] = results[i].error;
+            }
+            // Include prompt info for reference
+            if (i < items.size()) {
+                if (!items[i].raw_prompt.empty()) {
+                    result_obj["prompt"] = items[i].raw_prompt;
+                } else if (!items[i].messages.empty()) {
+                    result_obj["prompt"] = items[i].messages.back().content;
+                }
+            }
+            results_array.push_back(result_obj);
+
+            if (results[i].success) {
                 successful++;
-                total_generated_tokens += estimate_tokens(results[i]);
+                total_generated_tokens += static_cast<int>(results[i].tokens_generated);
             }
         }
 
-        double avg_time = (prompts.size() > 0) ? (total_time / prompts.size()) : 0;
+        double avg_time = (items.size() > 0) ? (total_time / items.size()) : 0;
 
-        // Update aggregate metrics (treat each prompt as a request)
-        total_requests_.fetch_add(static_cast<uint64_t>(prompts.size()));
+        // Update aggregate metrics
+        total_requests_.fetch_add(static_cast<uint64_t>(items.size()));
         total_tokens_ += total_generated_tokens;
         record_model_metrics(current_model, static_cast<uint64_t>(total_generated_tokens),
-                             total_time * 1000.0, static_cast<uint64_t>(prompts.size()));
+                             total_time * 1000.0, static_cast<uint64_t>(items.size()));
 
         json response = {
             {"status", "success"},
             {"results", results_array},
             {"model", current_model},
-            {"total_prompts", static_cast<int>(prompts.size())},
+            {"total_prompts", static_cast<int>(items.size())},
             {"successful", successful},
             {"total_time_s", total_time},
-            {"avg_time_per_prompt_s", avg_time}
+            {"avg_time_per_prompt_s", avg_time},
+            {"parallel_sequences", (std::min)(static_cast<int>(items.size()), 8)}
         };
 
         send_json(res, response.dump());
@@ -2736,6 +2915,16 @@ void SnapLLMServer::handle_generate_batch(const httplib::Request& req, httplib::
 void SnapLLMServer::handle_diffusion_generate(const httplib::Request& req, httplib::Response& res) {
 #ifdef SNAPLLM_HAS_DIFFUSION
     total_requests_++;
+
+    // === INFERENCE GATE ===
+    if (!acquire_inference_gate(60000)) {
+        total_errors_++;
+        send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
+                   "server_busy", 503);
+        return;
+    }
+    InferenceGateGuard gate_guard(true, [this]() { release_inference_gate(); });
+
     try {
         json body = json::parse(req.body);
 
@@ -2859,6 +3048,16 @@ void SnapLLMServer::handle_diffusion_video(const httplib::Request& req, httplib:
 void SnapLLMServer::handle_vision_generate(const httplib::Request& req, httplib::Response& res) {
 #ifdef SNAPLLM_HAS_MULTIMODAL
     total_requests_++;
+
+    // === INFERENCE GATE ===
+    if (!acquire_inference_gate(60000)) {
+        total_errors_++;
+        send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
+                   "server_busy", 503);
+        return;
+    }
+    InferenceGateGuard gate_guard(true, [this]() { release_inference_gate(); });
+
     try {
         json body = json::parse(req.body);
 
@@ -3085,6 +3284,15 @@ void SnapLLMServer::handle_websocket_upgrade(const httplib::Request& req, httpli
 // ============================================================================
 
 void SnapLLMServer::handle_context_ingest(const httplib::Request& req, httplib::Response& res) {
+    // === INFERENCE GATE: Context ingestion runs inference to build KV cache ===
+    if (!acquire_inference_gate(60000)) {
+        total_errors_++;
+        send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
+                   "server_busy", 503);
+        return;
+    }
+    InferenceGateGuard gate_guard(true, [this]() { release_inference_gate(); });
+
     try {
         json body = json::parse(req.body);
 
@@ -3255,6 +3463,15 @@ void SnapLLMServer::handle_context_get(const httplib::Request& req, httplib::Res
 }
 
 void SnapLLMServer::handle_context_query(const httplib::Request& req, httplib::Response& res, const std::string& context_id) {
+    // === INFERENCE GATE: Context query runs inference ===
+    if (!acquire_inference_gate(30000)) {
+        total_errors_++;
+        send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
+                   "server_busy", 503);
+        return;
+    }
+    InferenceGateGuard gate_guard(true, [this]() { release_inference_gate(); });
+
     try {
         json body = json::parse(req.body);
 

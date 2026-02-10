@@ -136,7 +136,7 @@ const API_ENDPOINTS: ApiEndpoint[] = [
     name: 'Batch Generation',
     method: 'POST',
     path: '/api/v1/generate/batch',
-    description: 'Generate multiple prompts in one call',
+    description: 'Parallel batch generation with per-prompt system prompts',
     category: 'chat',
   },
 
@@ -330,11 +330,25 @@ const buildTemplate = (endpointId: string, modelHint: string) => {
       };
     case 'generate-batch':
       return {
-        prompts: [
-          'Summarize the key benefits of local inference.',
-          'Write a short onboarding message for new users.',
+        items: [
+          {
+            messages: [
+              { role: 'system', content: 'You are a concise summarizer. Return 2-3 sentences max.' },
+              { role: 'user', content: 'Summarize the key benefits of local LLM inference.' },
+            ],
+            max_tokens: 128,
+            temperature: 0.3,
+          },
+          {
+            messages: [
+              { role: 'system', content: 'You are a friendly copywriter.' },
+              { role: 'user', content: 'Write a short onboarding message for new users.' },
+            ],
+            max_tokens: 256,
+            temperature: 0.8,
+          },
         ],
-        max_tokens: 256,
+        model: modelHint,
       };
     case 'image-gen':
       return {

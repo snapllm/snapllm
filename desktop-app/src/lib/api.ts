@@ -185,23 +185,52 @@ export interface GenerateResponse {
   tokens_per_second: number;
 }
 
-export interface BatchGenerateRequest {
-  prompts: string[];
+export interface BatchChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+export interface BatchItemRequest {
+  prompt?: string;
+  messages?: BatchChatMessage[];
+  system_prompt?: string;
   max_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  repeat_penalty?: number;
+}
+
+export interface BatchGenerateRequest {
+  prompts?: string[];           // Legacy format
+  items?: BatchItemRequest[];   // New parallel format with per-prompt params
+  max_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  repeat_penalty?: number;
   model?: string;
+}
+
+export interface BatchResultItem {
+  index: number;
+  prompt: string;
+  generated_text: string;
+  tokens_generated: number;
+  latency_ms: number;
+  success: boolean;
+  error?: string;
 }
 
 export interface BatchGenerateResponse {
   status: string;
-  results: {
-    prompt: string;
-    generated_text: string;
-  }[];
+  results: BatchResultItem[];
   model: string;
   total_prompts: number;
   successful: number;
   total_time_s: number;
   avg_time_per_prompt_s: number;
+  parallel_sequences: number;
 }
 
 export interface StreamMessage {

@@ -67,6 +67,13 @@ public:
                         float temperature = 0.8f, float top_p = 0.95f, int top_k = 40, float repeat_penalty = 1.1f);
     std::vector<std::string> generate_batch(const std::vector<std::string>& prompts, size_t max_tokens = 100);
 
+    // Parallel batch processing with per-prompt chat messages and sampling parameters
+    std::vector<BatchResult> generate_batch(
+        const std::vector<BatchPromptItem>& items,
+        float default_temp = 0.8f, float default_top_p = 0.95f,
+        int default_top_k = 40, float default_repeat_penalty = 1.1f
+    );
+
     // Streaming inference - true token-by-token streaming with callback
     size_t generate_streaming(const std::string& prompt, TokenCallback callback,
                               size_t max_tokens = 100, float temperature = 0.8f,
