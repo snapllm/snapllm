@@ -1,0 +1,221 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Enable long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Extract version
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Configure
+        run: >-
+          cmake -S . -B build_cpu -G "Visual Studio 17 2022" -A x64
+          -DSNAPLLM_CUDA=OFF
+          -DSNAPLLM_AVX2=ON
+          -DSNAPLLM_OPENMP=ON
+          -DSNAPLLM_ENABLE_DIFFUSION=ON
+          -DSNAPLLM_ENABLE_MULTIMODAL=ON
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build_cpu --config Release -j 2
+      - name: Verify binary
+        shell: pwsh
+        run: |
+          if (!(Test-Path "build_cpu\bin\snapllm.exe")) {
+            Write-Error "Binary not found at build_cpu\bin\snapllm.exe"
+            Get-ChildItem -Recurse build_cpu\bin\ -ErrorAction SilentlyContinue
+            Get-ChildItem -Recurse build_cpu\Release\ -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Write-Host "Binary found: build_cpu\bin\snapllm.exe"
+      - name: Smoke test
+        run: powershell -File scripts/ci_smoke_test.ps1 -SnapllmPath build_cpu\bin\snapllm.exe
+      - name: Package release
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          $rel = "snapllm-${env:VERSION}-windows-x64-cpu"
+          $dir = "release-pkg\$rel"
+          New-Item -ItemType Directory -Force -Path "$dir\bin"
+          New-Item -ItemType Directory -Force -Path "$dir\examples"
+          New-Item -ItemType Directory -Force -Path "$dir\docs"
+
+          # Binary
+          Copy-Item "build_cpu\bin\snapllm.exe" "$dir\bin\"
+
+          # Docs
+          Copy-Item "README.md" "$dir\" -ErrorAction SilentlyContinue
+          Copy-Item "LICENSE" "$dir\" -ErrorAction SilentlyContinue
+          Copy-Item "QUICKSTART.md" "$dir\" -ErrorAction SilentlyContinue
+          Copy-Item "docs\*.md" "$dir\docs\" -ErrorAction SilentlyContinue
+
+          # Examples
+          Copy-Item "examples\*.py" "$dir\examples\" -ErrorAction SilentlyContinue
+          Copy-Item "examples\README.md" "$dir\examples\" -ErrorAction SilentlyContinue
+
+          # Start scripts
+          @"
+          @echo off
+          echo Starting SnapLLM Server...
+          echo.
+          cd /d "%~dp0"
+          bin\snapllm.exe --server --port 6930 %*
+          pause
+          "@ | Set-Content "$dir\run_server.bat"
+
+          @"
+          @echo off
+          echo.
+          echo  SnapLLM Server with Model
+          echo  =========================
+          echo.
+          set /p MODEL_PATH="Enter path to your .gguf model file: "
+          set /p MODEL_NAME="Enter a name for this model: "
+          echo.
+          echo Starting server with model: %MODEL_NAME%
+          cd /d "%~dp0"
+          bin\snapllm.exe --server --port 6930 --load-model %MODEL_NAME% "%MODEL_PATH%"
+          pause
+          "@ | Set-Content "$dir\run_server_with_model.bat"
+
+          # Version file
+          $env:VERSION | Set-Content "$dir\VERSION"
+
+          # Create ZIP
+          Compress-Archive -Path "$dir\*" -DestinationPath "release-pkg\$rel.zip" -Force
+          Write-Host "Created release-pkg\$rel.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: release-pkg/*.zip
+          retention-days: 1
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Configure
+        run: >-
+          cmake -S . -B build_cpu
+          -DSNAPLLM_CUDA=OFF
+          -DSNAPLLM_AVX2=ON
+          -DSNAPLLM_OPENMP=ON
+          -DSNAPLLM_ENABLE_DIFFUSION=ON
+          -DSNAPLLM_ENABLE_MULTIMODAL=ON
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build_cpu -j 2
+      - name: Smoke test
+        run: |
+          chmod +x scripts/ci_smoke_test.sh
+          bash scripts/ci_smoke_test.sh build_cpu/bin/snapllm
+      - name: Package release
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          REL="snapllm-${VERSION}-linux-x64-cpu"
+          DIR="release-pkg/${REL}"
+          mkdir -p "${DIR}/bin" "${DIR}/examples" "${DIR}/docs" "${DIR}/lib"
+
+          # Binary
+          cp build_cpu/bin/snapllm "${DIR}/bin/"
+          chmod +x "${DIR}/bin/snapllm"
+
+          # Shared libs (if any)
+          cp build_cpu/lib/*.so* "${DIR}/lib/" 2>/dev/null || true
+
+          # Docs
+          cp README.md "${DIR}/" 2>/dev/null || true
+          cp LICENSE "${DIR}/" 2>/dev/null || true
+          cp QUICKSTART.md "${DIR}/" 2>/dev/null || true
+          cp docs/*.md "${DIR}/docs/" 2>/dev/null || true
+
+          # Examples
+          cp examples/*.py "${DIR}/examples/" 2>/dev/null || true
+          cp examples/README.md "${DIR}/examples/" 2>/dev/null || true
+
+          # Start scripts
+          cat > "${DIR}/run_server.sh" << 'SCRIPT'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${LD_LIBRARY_PATH}"
+          echo "Starting SnapLLM Server..."
+          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 "$@"
+          SCRIPT
+          chmod +x "${DIR}/run_server.sh"
+
+          cat > "${DIR}/run_server_with_model.sh" << 'SCRIPT'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${LD_LIBRARY_PATH}"
+          echo ""
+          echo " SnapLLM Server with Model"
+          echo " ========================="
+          echo ""
+          read -p "Enter path to your .gguf model file: " MODEL_PATH
+          read -p "Enter a name for this model: " MODEL_NAME
+          echo ""
+          echo "Starting server with model: ${MODEL_NAME}"
+          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --load-model "${MODEL_NAME}" "${MODEL_PATH}"
+          SCRIPT
+          chmod +x "${DIR}/run_server_with_model.sh"
+
+          # Version file
+          echo "${VERSION}" > "${DIR}/VERSION"
+
+          # Create tarball
+          cd release-pkg
+          tar -czvf "${REL}.tar.gz" "${REL}"
+          echo "Created release-pkg/${REL}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: release-pkg/*.tar.gz
+          retention-days: 1
+
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-linux]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: artifacts/
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-release
+          path: artifacts/
+      - name: List artifacts
+        run: ls -lhR artifacts/
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          gh release create "${{ github.ref_name }}" \
+            --title "SnapLLM v${VERSION}" \
+            --generate-notes \
+            --latest \
+            artifacts/*
