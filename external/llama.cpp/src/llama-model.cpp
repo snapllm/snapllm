@@ -2368,7 +2368,7 @@ bool llama_model::vdpe_load_cache(llama_model_loader & ml) {
     manifest.close();
 
     if (num_tensors != ml.n_tensors) {
-        LLAMA_LOG_WARN("%s: vDPE cache tensor count mismatch (expected %zu, got %llu)\n",
+        LLAMA_LOG_WARN("%s: vDPE cache tensor count mismatch (expected %d, got %llu)\n",
                        __func__, ml.n_tensors, (unsigned long long)num_tensors);
         tensors_by_name.clear();  // Clean up before returning
         return false;  // Tensor count mismatch
@@ -2474,7 +2474,7 @@ bool llama_model::vdpe_load_cache(llama_model_loader & ml) {
             std::ifstream tensor_file(tensor_path, std::ios::binary);
 
             if (!tensor_file.is_open()) {
-                LLAMA_LOG_ERROR("%s: vDPE: Failed to open cache file for data loading: %s\n", __func__, name);
+                LLAMA_LOG_ERROR("%s: vDPE: Failed to open cache file for data loading: %s\n", __func__, name.c_str());
                 continue;
             }
 
