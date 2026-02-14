@@ -192,9 +192,97 @@ jobs:
           path: release-pkg/*.tar.gz
           retention-days: 1
 
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Configure
+        run: >-
+          cmake -S . -B build_cpu
+          -DSNAPLLM_CUDA=OFF
+          -DSNAPLLM_AVX2=OFF
+          -DSNAPLLM_OPENMP=OFF
+          -DSNAPLLM_ENABLE_DIFFUSION=ON
+          -DSNAPLLM_ENABLE_MULTIMODAL=ON
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build_cpu -j 3
+      - name: Smoke test
+        run: |
+          chmod +x scripts/ci_smoke_test.sh
+          bash scripts/ci_smoke_test.sh build_cpu/bin/snapllm
+      - name: Package release
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          REL="snapllm-${VERSION}-macos-arm64"
+          DIR="release-pkg/${REL}"
+          mkdir -p "${DIR}/bin" "${DIR}/examples" "${DIR}/docs" "${DIR}/lib"
+
+          # Binary
+          cp build_cpu/bin/snapllm "${DIR}/bin/"
+          chmod +x "${DIR}/bin/snapllm"
+
+          # Shared libs (if any)
+          cp build_cpu/lib/*.dylib "${DIR}/lib/" 2>/dev/null || true
+
+          # Docs
+          cp README.md "${DIR}/" 2>/dev/null || true
+          cp LICENSE "${DIR}/" 2>/dev/null || true
+          cp QUICKSTART.md "${DIR}/" 2>/dev/null || true
+          cp docs/*.md "${DIR}/docs/" 2>/dev/null || true
+
+          # Examples
+          cp examples/*.py "${DIR}/examples/" 2>/dev/null || true
+          cp examples/README.md "${DIR}/examples/" 2>/dev/null || true
+
+          # Start scripts
+          cat > "${DIR}/run_server.sh" << 'SCRIPT'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export DYLD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${DYLD_LIBRARY_PATH}"
+          echo "Starting SnapLLM Server..."
+          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 "$@"
+          SCRIPT
+          chmod +x "${DIR}/run_server.sh"
+
+          cat > "${DIR}/run_server_with_model.sh" << 'SCRIPT'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export DYLD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${DYLD_LIBRARY_PATH}"
+          echo ""
+          echo " SnapLLM Server with Model"
+          echo " ========================="
+          echo ""
+          read -p "Enter path to your .gguf model file: " MODEL_PATH
+          read -p "Enter a name for this model: " MODEL_NAME
+          echo ""
+          echo "Starting server with model: ${MODEL_NAME}"
+          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --load-model "${MODEL_NAME}" "${MODEL_PATH}"
+          SCRIPT
+          chmod +x "${DIR}/run_server_with_model.sh"
+
+          # Version file
+          echo "${VERSION}" > "${DIR}/VERSION"
+
+          # Create tarball
+          cd release-pkg
+          tar -czvf "${REL}.tar.gz" "${REL}"
+          echo "Created release-pkg/${REL}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: release-pkg/*.tar.gz
+          retention-days: 1
+
   create-release:
     runs-on: ubuntu-latest
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -206,6 +294,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: linux-release
+          path: artifacts/
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-release
           path: artifacts/
       - name: List artifacts
         run: ls -lhR artifacts/

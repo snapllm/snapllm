@@ -61,6 +61,28 @@ jobs:
           chmod +x scripts/ci_smoke_test.sh
           bash scripts/ci_smoke_test.sh build_cpu/bin/snapllm
 
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Configure
+        run: >-
+          cmake -S . -B build_cpu
+          -DSNAPLLM_CUDA=OFF
+          -DSNAPLLM_AVX2=OFF
+          -DSNAPLLM_OPENMP=OFF
+          -DSNAPLLM_ENABLE_DIFFUSION=ON
+          -DSNAPLLM_ENABLE_MULTIMODAL=ON
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build_cpu -j 3
+      - name: Smoke Test
+        run: |
+          chmod +x scripts/ci_smoke_test.sh
+          bash scripts/ci_smoke_test.sh build_cpu/bin/snapllm
+
   desktop-app:
     runs-on: ubuntu-latest
     defaults:
