@@ -58,6 +58,7 @@ namespace fs = std::filesystem;
 #include <cctype>
 #include <fstream>
 #include <vector>
+#include <thread>
 
 using json = nlohmann::ordered_json;
 
@@ -462,6 +463,24 @@ bool SnapLLMServer::start() {
         } else {
             std::cerr << "[Server] Warning: Failed to mount UI directory: " << config_.ui_dir << std::endl;
         }
+    }
+
+    // Auto-open browser for Web UI after server starts
+    if (!config_.ui_dir.empty()) {
+        std::string url = "http://" + config_.host + ":" + std::to_string(config_.port) + "/";
+        std::thread([url]() {
+            // Brief delay to let the server socket bind
+            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+#ifdef _WIN32
+            std::string cmd = "start \"\" \"" + url + "\"";
+#elif defined(__APPLE__)
+            std::string cmd = "open \"" + url + "\"";
+#else
+            std::string cmd = "xdg-open \"" + url + "\" 2>/dev/null || true";
+#endif
+            std::system(cmd.c_str());
+            std::cout << "[Server] Opened Web UI in browser: " << url << std::endl;
+        }).detach();
     }
 
     running_ = true;
