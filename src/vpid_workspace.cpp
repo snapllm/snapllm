@@ -202,13 +202,22 @@ bool VPIDWorkspace::create_or_open_file() {
     return true;
 
 #else
-    // Linux/Unix implementation
+    // Linux/Unix/macOS implementation
     int flags = O_RDWR | O_CREAT;
+#ifdef __linux__
     if (use_direct_io_) {
         flags |= O_DIRECT | O_SYNC;
     }
+#endif
 
     file_descriptor_ = open(workspace_path_.c_str(), flags, 0644);
+
+#ifdef __APPLE__
+    // macOS doesn't have O_DIRECT; use F_NOCACHE via fcntl instead
+    if (use_direct_io_ && file_descriptor_ >= 0) {
+        fcntl(file_descriptor_, F_NOCACHE, 1);
+    }
+#endif
     if (file_descriptor_ < 0) {
         std::cerr << "[vPID] open failed: " << strerror(errno) << std::endl;
         return false;
