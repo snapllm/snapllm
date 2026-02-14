@@ -77,6 +77,7 @@ struct ServerConfig {
     int default_ram_budget_mb = 16384;       ///< UI default RAM budget
     std::string default_strategy = "balanced"; ///< UI default strategy
     bool enable_gpu = true;                  ///< UI hint for GPU availability
+    std::string ui_dir = "";                 ///< Web UI static files directory (auto-detected)
 };
 
 /**

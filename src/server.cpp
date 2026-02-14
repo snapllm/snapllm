@@ -414,6 +414,10 @@ bool SnapLLMServer::start() {
     std::cout << "  Listening on: http://" << config_.host << ":" << config_.port << "\n";
     std::cout << "  Workspace:    " << config_.workspace_root << "\n";
     std::cout << "  CORS:         " << (config_.cors_enabled ? "enabled" : "disabled") << "\n";
+    if (!config_.ui_dir.empty()) {
+        std::cout << "  Web UI:       http://" << config_.host << ":" << config_.port << "/\n";
+        std::cout << "  UI Files:     " << config_.ui_dir << "\n";
+    }
     std::cout << "================================================================\n";
     std::cout << "\n";
     std::cout << "  API Endpoints:\n";
@@ -450,6 +454,15 @@ bool SnapLLMServer::start() {
     std::cout << "\n";
     std::cout << "  Press Ctrl+C to stop the server.\n";
     std::cout << "================================================================\n\n";
+
+    // Mount Web UI static files directory if configured
+    if (!config_.ui_dir.empty()) {
+        if (svr_->set_mount_point("/", config_.ui_dir)) {
+            std::cout << "[Server] Serving Web UI from: " << config_.ui_dir << std::endl;
+        } else {
+            std::cerr << "[Server] Warning: Failed to mount UI directory: " << config_.ui_dir << std::endl;
+        }
+    }
 
     running_ = true;
     bool result = svr_->listen(config_.host.c_str(), config_.port);
@@ -505,10 +518,27 @@ void SnapLLMServer::setup_middleware() {
         return httplib::Server::HandlerResponse::Unhandled;
     });
 
-    // Error handler
+    // Error handler (also serves SPA fallback for Web UI)
     svr_->set_error_handler([this](const httplib::Request& req, httplib::Response& res) {
         if (req.method == "POST" && dispatch_post(req, res)) {
             return;
+        }
+        // SPA fallback: serve index.html for non-API GET requests (React Router)
+        if (!config_.ui_dir.empty() && res.status == 404 && req.method == "GET" &&
+            req.path.find("/api/") == std::string::npos &&
+            req.path.find("/v1/") == std::string::npos &&
+            req.path.find("/health") == std::string::npos &&
+            req.path.find("/ws/") == std::string::npos) {
+            auto index_path = fs::path(config_.ui_dir) / "index.html";
+            if (fs::exists(index_path)) {
+                std::ifstream file(index_path, std::ios::binary);
+                if (file) {
+                    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                    res.status = 200;
+                    res.set_content(content, "text/html");
+                    return;
+                }
+            }
         }
         std::string msg = "Not found: " + req.path;
         send_error(res, msg, "not_found", 404);
@@ -649,13 +679,47 @@ void SnapLLMServer::setup_routes() {
     // ALL GET ROUTES
     // =========================================================================
 
-    // Root path - return API info
-    svr_->Get("/", [this](const httplib::Request& req, httplib::Response& res) {
+    // API info endpoint (always available)
+    svr_->Get("/api", [this](const httplib::Request& req, httplib::Response& res) {
         json response = {
             {"name", "SnapLLM API"},
             {"version", SNAPLLM_VERSION},
             {"status", "running"},
             {"description", "High-performance multi-model LLM inference with <1ms switching"},
+            {"endpoints", {
+                {"health", "/health"},
+                {"models", "/api/v1/models"},
+                {"load_model", "/api/v1/models/load"},
+                {"switch_model", "/api/v1/models/switch"},
+                {"chat", "/v1/chat/completions"},
+                {"generate", "/api/v1/generate"},
+                {"vision", "/api/v1/vision/generate"},
+                {"diffusion", "/api/v1/diffusion/generate"}
+            }}
+        };
+        send_json(res, response.dump());
+    });
+
+    // Root path - serve Web UI index.html if available, otherwise API info
+    svr_->Get("/", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!config_.ui_dir.empty()) {
+            auto index_path = fs::path(config_.ui_dir) / "index.html";
+            if (fs::exists(index_path)) {
+                std::ifstream file(index_path, std::ios::binary);
+                if (file) {
+                    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                    res.set_content(content, "text/html");
+                    return;
+                }
+            }
+        }
+        // Fallback: JSON API info
+        json response = {
+            {"name", "SnapLLM API"},
+            {"version", SNAPLLM_VERSION},
+            {"status", "running"},
+            {"description", "High-performance multi-model LLM inference with <1ms switching"},
+            {"ui", config_.ui_dir.empty() ? "not configured" : "enabled at /"},
             {"endpoints", {
                 {"health", "/health"},
                 {"models", "/api/v1/models"},

@@ -230,6 +230,7 @@ void print_usage() {
     std::cout << "  --server                  Start HTTP server mode\n";
     std::cout << "  --host HOST               Server host (default: 127.0.0.1)\n";
     std::cout << "  --port PORT               Server port (default: 6930)\n";
+    std::cout << "  --ui-dir PATH             Web UI files directory (default: auto-detect)\n";
 #ifdef SNAPLLM_HAS_DIFFUSION
     std::cout << "\nImage Generation Options:\n";
     std::cout << "  --load-diffusion NAME PATH  Load a diffusion model (SD/SDXL/FLUX)\n";
@@ -396,6 +397,7 @@ int main(int argc, char** argv) {
     int default_ram_budget_mb = 16384;
     std::string default_strategy = "balanced";
     bool enable_gpu = true;
+    std::string ui_dir = "";
     std::string config_path = get_default_config_path();
 
     // Load persisted configuration defaults (CLI args override these)
@@ -573,6 +575,9 @@ int main(int argc, char** argv) {
         else if (arg == "--port" && i + 1 < argc) {
             server_port = std::stoi(argv[++i]);
         }
+        else if (arg == "--ui-dir" && i + 1 < argc) {
+            ui_dir = argv[++i];
+        }
 #ifdef SNAPLLM_HAS_DIFFUSION
         else if (arg == "--load-diffusion" && i + 2 < argc) {
             std::string name = argv[++i];
@@ -694,6 +699,31 @@ int main(int argc, char** argv) {
     // Server Mode - Start HTTP server and block
     // =========================================================================
     if (server_mode) {
+        // Auto-detect Web UI directory if not explicitly set
+        if (ui_dir.empty()) {
+            // Check relative to executable: ../ui/ (release package layout: bin/snapllm + ui/)
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::path exe_path = fs::canonical("/proc/self/exe", ec);
+#ifdef _WIN32
+            {
+                char buf[MAX_PATH];
+                GetModuleFileNameA(nullptr, buf, MAX_PATH);
+                exe_path = fs::path(buf);
+            }
+#endif
+            if (!exe_path.empty()) {
+                auto ui_candidate = exe_path.parent_path().parent_path() / "ui";
+                if (fs::is_directory(ui_candidate, ec)) {
+                    ui_dir = ui_candidate.string();
+                }
+            }
+            // Also check ./ui/ relative to cwd
+            if (ui_dir.empty() && fs::is_directory("ui", ec)) {
+                ui_dir = fs::canonical("ui", ec).string();
+            }
+        }
+
         ServerConfig config;
         config.host = server_host;
         config.port = server_port;
@@ -707,6 +737,7 @@ int main(int argc, char** argv) {
         config.default_strategy = default_strategy;
         config.enable_gpu = enable_gpu;
         config.config_path = config_path;
+        config.ui_dir = ui_dir;
 
         SnapLLMServer server(config);
 

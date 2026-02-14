@@ -8,8 +8,34 @@ permissions:
   contents: write
 
 jobs:
+  build-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: desktop-app/package-lock.json
+      - name: Install dependencies
+        run: npm --prefix desktop-app ci
+      - name: Build Web UI
+        run: npm --prefix desktop-app run build
+      - name: Verify build
+        run: |
+          test -f desktop-app/dist/index.html || { echo "index.html not found"; exit 1; }
+          ls -lhR desktop-app/dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-ui
+          path: desktop-app/dist/
+          retention-days: 1
+
   build-windows:
     runs-on: windows-latest
+    needs: [build-ui]
     steps:
       - name: Enable long paths
         run: git config --global core.longpaths true
@@ -43,6 +69,10 @@ jobs:
           Write-Host "Binary found: build_cpu\bin\snapllm.exe"
       - name: Smoke test
         run: powershell -File scripts/ci_smoke_test.ps1 -SnapllmPath build_cpu\bin\snapllm.exe
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-ui
+          path: web-ui-dist/
       - name: Package release
         shell: pwsh
         env:
@@ -53,9 +83,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$dir\bin"
           New-Item -ItemType Directory -Force -Path "$dir\examples"
           New-Item -ItemType Directory -Force -Path "$dir\docs"
+          New-Item -ItemType Directory -Force -Path "$dir\ui"
 
           # Binary
           Copy-Item "build_cpu\bin\snapllm.exe" "$dir\bin\"
+
+          # Web UI
+          Copy-Item "web-ui-dist\*" "$dir\ui\" -Recurse -Force
 
           # Docs
           Copy-Item "README.md" "$dir\" -ErrorAction SilentlyContinue
@@ -70,10 +104,12 @@ jobs:
           # Start scripts
           @"
           @echo off
-          echo Starting SnapLLM Server...
+          echo Starting SnapLLM Server with Web UI...
           echo.
           cd /d "%~dp0"
-          bin\snapllm.exe --server --port 6930 %*
+          echo Web UI will be available at: http://localhost:6930/
+          echo.
+          bin\snapllm.exe --server --port 6930 --ui-dir ui %*
           pause
           "@ | Set-Content "$dir\run_server.bat"
 
@@ -87,8 +123,9 @@ jobs:
           set /p MODEL_NAME="Enter a name for this model: "
           echo.
           echo Starting server with model: %MODEL_NAME%
+          echo Web UI will be available at: http://localhost:6930/
           cd /d "%~dp0"
-          bin\snapllm.exe --server --port 6930 --load-model %MODEL_NAME% "%MODEL_PATH%"
+          bin\snapllm.exe --server --port 6930 --ui-dir ui --load-model %MODEL_NAME% "%MODEL_PATH%"
           pause
           "@ | Set-Content "$dir\run_server_with_model.bat"
 
@@ -106,6 +143,7 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-latest
+    needs: [build-ui]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -128,17 +166,24 @@ jobs:
         run: |
           chmod +x scripts/ci_smoke_test.sh
           bash scripts/ci_smoke_test.sh build_cpu/bin/snapllm
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-ui
+          path: web-ui-dist/
       - name: Package release
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           REL="snapllm-${VERSION}-linux-x64-cpu"
           DIR="release-pkg/${REL}"
-          mkdir -p "${DIR}/bin" "${DIR}/examples" "${DIR}/docs" "${DIR}/lib"
+          mkdir -p "${DIR}/bin" "${DIR}/examples" "${DIR}/docs" "${DIR}/lib" "${DIR}/ui"
 
           # Binary
           cp build_cpu/bin/snapllm "${DIR}/bin/"
           chmod +x "${DIR}/bin/snapllm"
+
+          # Web UI
+          cp -r web-ui-dist/* "${DIR}/ui/"
 
           # Shared libs (if any)
           cp build_cpu/lib/*.so* "${DIR}/lib/" 2>/dev/null || true
@@ -158,8 +203,9 @@ jobs:
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${LD_LIBRARY_PATH}"
-          echo "Starting SnapLLM Server..."
-          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 "$@"
+          echo "Starting SnapLLM Server with Web UI..."
+          echo "Web UI will be available at: http://localhost:6930/"
+          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --ui-dir "${SCRIPT_DIR}/ui" "$@"
           SCRIPT
           chmod +x "${DIR}/run_server.sh"
 
@@ -175,7 +221,8 @@ jobs:
           read -p "Enter a name for this model: " MODEL_NAME
           echo ""
           echo "Starting server with model: ${MODEL_NAME}"
-          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --load-model "${MODEL_NAME}" "${MODEL_PATH}"
+          echo "Web UI will be available at: http://localhost:6930/"
+          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --ui-dir "${SCRIPT_DIR}/ui" --load-model "${MODEL_NAME}" "${MODEL_PATH}"
           SCRIPT
           chmod +x "${DIR}/run_server_with_model.sh"
 
@@ -194,6 +241,7 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
+    needs: [build-ui]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -216,17 +264,24 @@ jobs:
         run: |
           chmod +x scripts/ci_smoke_test.sh
           bash scripts/ci_smoke_test.sh build_cpu/bin/snapllm
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-ui
+          path: web-ui-dist/
       - name: Package release
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           REL="snapllm-${VERSION}-macos-arm64"
           DIR="release-pkg/${REL}"
-          mkdir -p "${DIR}/bin" "${DIR}/examples" "${DIR}/docs" "${DIR}/lib"
+          mkdir -p "${DIR}/bin" "${DIR}/examples" "${DIR}/docs" "${DIR}/lib" "${DIR}/ui"
 
           # Binary
           cp build_cpu/bin/snapllm "${DIR}/bin/"
           chmod +x "${DIR}/bin/snapllm"
+
+          # Web UI
+          cp -r web-ui-dist/* "${DIR}/ui/"
 
           # Shared libs (if any)
           cp build_cpu/lib/*.dylib "${DIR}/lib/" 2>/dev/null || true
@@ -246,8 +301,9 @@ jobs:
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
           export DYLD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${DYLD_LIBRARY_PATH}"
-          echo "Starting SnapLLM Server..."
-          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 "$@"
+          echo "Starting SnapLLM Server with Web UI..."
+          echo "Web UI will be available at: http://localhost:6930/"
+          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --ui-dir "${SCRIPT_DIR}/ui" "$@"
           SCRIPT
           chmod +x "${DIR}/run_server.sh"
 
@@ -263,7 +319,8 @@ jobs:
           read -p "Enter a name for this model: " MODEL_NAME
           echo ""
           echo "Starting server with model: ${MODEL_NAME}"
-          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --load-model "${MODEL_NAME}" "${MODEL_PATH}"
+          echo "Web UI will be available at: http://localhost:6930/"
+          exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --ui-dir "${SCRIPT_DIR}/ui" --load-model "${MODEL_NAME}" "${MODEL_PATH}"
           SCRIPT
           chmod +x "${DIR}/run_server_with_model.sh"
 
