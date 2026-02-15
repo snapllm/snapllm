@@ -281,12 +281,16 @@ bool ModelManager::ensure_model_in_gpu(const std::string& name) {
     std::cout << "[SnapLLM] Auto-reloading evicted model: " << name << std::endl;
     std::cout << "[SnapLLM] Using cached vPID workspace (fast reload)" << std::endl;
 
-    // Reload the model - this will use existing vPID cache for fast load
+    // Reload the model - mmap + OS page cache makes this fast after first load
+    auto reload_start = std::chrono::high_resolution_clock::now();
     bool success = bridge_->load_and_dequantize_model(name, path_it->second);
+    auto reload_end = std::chrono::high_resolution_clock::now();
+    auto reload_ms = std::chrono::duration_cast<std::chrono::milliseconds>(reload_end - reload_start).count();
+
     if (success) {
-        std::cout << "[SnapLLM] Model '" << name << "' reloaded successfully" << std::endl;
+        std::cout << "[SnapLLM] Reloaded '" << name << "' in " << reload_ms << "ms" << std::endl;
     } else {
-        std::cerr << "[SnapLLM] Failed to reload model: " << name << std::endl;
+        std::cerr << "[SnapLLM] Failed to reload model: " << name << " (after " << reload_ms << "ms)" << std::endl;
     }
 
     return success;

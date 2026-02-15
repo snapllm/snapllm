@@ -595,7 +595,7 @@ bool VPIDBridge::load_and_dequantize_model(
 
     // Load model using llama.cpp with vDPE caching enabled
     llama_model_params model_params = llama_model_default_params();
-    model_params.use_mmap = false;                                    // Load tensors fully into memory
+    model_params.use_mmap = true;                                     // Enable mmap: OS page cache speeds up reloads of evicted models
     model_params.use_external_tensors = use_external;                 // ✅ Only if manifest exists AND mmap available
     model_params.vdpe_enable = false;  // Disabled: F32 cache not useful for GPU mode                                  // ✅ vDPE: Enable F32 cache save/load
     model_params.vdpe_cache_path = vdpe_cache_dir.c_str();            // vDPE cache directory
