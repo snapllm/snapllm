@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Global State Store (Zustand)
+// SnapLLM - Global State Store (Zustand)
 // ============================================================================
 
 import { create } from 'zustand';

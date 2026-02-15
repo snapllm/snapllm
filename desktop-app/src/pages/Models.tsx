@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Advanced Model Management Hub
+// SnapLLM - Advanced Model Management Hub
 // Runtime Selection, Model Graphs, vPID Management
 // ============================================================================
 

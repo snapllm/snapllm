@@ -1,5 +1,5 @@
 ﻿// ============================================================================
-// SnapLLM Enterprise - Video Studio (Disabled)
+// SnapLLM - Video Studio (Disabled)
 // ============================================================================
 
 import React from 'react';

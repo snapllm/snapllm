@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Security Settings
+// SnapLLM - Security Settings
 // Access Controls, Encryption, and Security Configuration
 // ============================================================================
 

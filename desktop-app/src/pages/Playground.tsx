@@ -1,6 +1,6 @@
 
 // ============================================================================
-// SnapLLM Enterprise - API Playground
+// SnapLLM - API Playground
 // ============================================================================
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';

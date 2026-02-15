@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Main Layout Component
+// SnapLLM - Main Layout Component
 // ============================================================================
 
 import React, { useEffect } from 'react';

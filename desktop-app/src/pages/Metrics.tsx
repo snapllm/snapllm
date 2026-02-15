@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Analytics & Observability Dashboard
+// SnapLLM - Analytics & Observability Dashboard
 // Real-time Metrics, Performance Monitoring, and System Insights
 // ============================================================================
 

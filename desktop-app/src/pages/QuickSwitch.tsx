@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Quick Switch
+// SnapLLM - Quick Switch
 // Ultra-Fast Model Switching with vPID Architecture
 // ============================================================================
 

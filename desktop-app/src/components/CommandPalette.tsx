@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Command Palette (⌘K)
+// SnapLLM - Command Palette (⌘K)
 // ============================================================================
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';

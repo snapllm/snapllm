@@ -77,11 +77,13 @@ Switch B -> A: 0.02ms  <- Instant!
 | Feature | Description |
 |---------|-------------|
 | **Fast <1ms Model Switching** | Switch between loaded models instantly using vPID architecture |
+| **Fast Reload After Eviction** | mmap + OS page cache reduces reload of evicted models from seconds to ~300ms |
 | **Multi-Model Management** | Load and manage multiple models simultaneously |
 | **GPU/CPU Hybrid** | Automatic layer distribution based on available VRAM |
 | **OpenAI-Compatible API** | Drop-in replacement for OpenAI API |
 | **Multi-Modal Support** | LLM, Vision (VLM), and Stable Diffusion models |
 | **KV Cache Persistence** | vPID L2 context caching for O(1) query complexity |
+| **Bundled Web UI** | Built-in React dashboard served at `localhost:6930` with auto browser launch |
 | **Desktop Application** | Beautiful React-based UI for model management |
 
 ### Supported Model Types
@@ -103,18 +105,19 @@ Switch B -> A: 0.02ms  <- Instant!
 
 | Model | Size | Quantization | Speed |
 |-------|------|--------------|-------|
-| Medicine-LLM | 8B | Q8_0 | 64 tok/s |
-| Gemma 3 | 4B | Q5_K_M | 65 tok/s |
+| Medicine-LLM | 8B | Q8_0 | 44 tok/s |
+| Gemma 3 | 4B | Q5_K_M | 55 tok/s |
 | Qwen 3 | 8B | Q8_0 | 58 tok/s |
-| Llama 3 | 8B | Q4_K_M | 75 tok/s |
+| Llama 3 | 8B | Q4_K_M | 45 tok/s |
 
 #### Multi-Model Switching Performance
 
 | Operation | Time |
 |-----------|------|
-| First model load | 2-5s (includes dequantization) |
+| First model load | 2-5s (GGUF → GPU) |
+| Reload after eviction | ~300-500ms (mmap page cache hit) |
 | Subsequent loads | <100ms (cached) |
-| Model switch | **<1ms** |
+| Model switch (in VRAM) | **<1ms** |
 | Rapid switching (3 models) | <3ms total |
 
 ---
@@ -262,10 +265,13 @@ curl -X POST http://localhost:6930/v1/chat/completions \
   }'
 ```
 
-### 5. Use the Desktop App (UI still in Beta)
+### 5. Use the Web UI
+
+The server automatically opens a browser to the built-in dashboard at `http://localhost:6930/` when started.
+
+To run the standalone desktop app (development mode):
 
 ```bash
-# Start the frontend (requires Node.js)
 cd desktop-app
 npm install
 npm run dev
@@ -714,6 +720,7 @@ Options:
   --host HOST              Bind address (default: 0.0.0.0)
   --cors                   Enable CORS
   --workspace PATH         Workspace directory
+  --ui-dir PATH            Web UI directory (auto-detected)
   --load-model NAME PATH   Pre-load a model
 ```
 

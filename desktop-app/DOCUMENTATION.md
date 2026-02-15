@@ -1,4 +1,4 @@
-# SnapLLM Enterprise UI Suite
+# SnapLLM UI Suite
 ## Comprehensive Documentation
 
 **Version:** 1.0.0
@@ -27,7 +27,7 @@
 
 ### 1.1 Introduction
 
-SnapLLM Enterprise UI Suite is a billion-dollar grade enterprise application for managing multi-model AI inference. It provides a comprehensive interface for:
+SnapLLM UI Suite is a billion-dollar grade enterprise application for managing multi-model AI inference. It provides a comprehensive interface for:
 
 - **Multi-Model Management**: Load, configure, and switch between multiple AI models with sub-millisecond latency using vPID (Virtual Processing-In-Disk) architecture
 - **GenAI Studio**: Chat, Image Generation, Video Generation, and Vision/Multimodal capabilities
@@ -1535,7 +1535,7 @@ docker run -p 80:80 snapllm-ui
 
 ## Appendix E: License
 
-SnapLLM Enterprise UI Suite is licensed under the MIT License.
+SnapLLM UI Suite is licensed under the MIT License.
 
 ```
 MIT License

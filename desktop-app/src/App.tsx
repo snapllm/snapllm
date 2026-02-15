@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Main Application Entry
+// SnapLLM - Main Application Entry
 // Premium Multi-Model AI Platform
 // ============================================================================
 

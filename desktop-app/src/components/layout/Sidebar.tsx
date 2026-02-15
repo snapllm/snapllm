@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Sidebar Navigation
+// SnapLLM - Sidebar Navigation
 // ============================================================================
 
 import React from 'react';

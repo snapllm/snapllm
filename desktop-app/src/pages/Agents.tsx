@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - AI Agents
+// SnapLLM - AI Agents
 // Autonomous Multi-Modal AI Agents with Tool Use, Workflows, and Analytics
 // Comprehensive Implementation with Validation and Persistence
 // ============================================================================

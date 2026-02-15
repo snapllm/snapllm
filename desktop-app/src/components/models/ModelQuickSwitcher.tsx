@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Model Quick Switcher
+// SnapLLM - Model Quick Switcher
 // Ultra-fast <1ms model switching UI
 // ============================================================================
 

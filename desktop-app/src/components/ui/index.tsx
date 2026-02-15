@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Core UI Components
+// SnapLLM - Core UI Components
 // ============================================================================
 
 import React, { forwardRef, ReactNode, ButtonHTMLAttributes, InputHTMLAttributes } from 'react';

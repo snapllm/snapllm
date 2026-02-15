@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Chat Interface
+// SnapLLM - Chat Interface
 // Premium AI Chat Experience with Real-time Streaming
 // ============================================================================
 

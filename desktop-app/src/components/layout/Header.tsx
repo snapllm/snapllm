@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Header Component
+// SnapLLM - Header Component
 // ============================================================================
 
 import React, { useState } from 'react';

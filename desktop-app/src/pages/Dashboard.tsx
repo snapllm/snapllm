@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Dashboard Page
+// SnapLLM - Dashboard Page
 // Comprehensive metrics, vPID cache performance, validation & system monitoring
 // ============================================================================
 

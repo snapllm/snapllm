@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Image Studio
+// SnapLLM - Image Studio
 // AI Image Generation with Stable Diffusion, Gallery Management & Analytics
 // ============================================================================
 

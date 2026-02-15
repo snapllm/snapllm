@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Visual Workflow Builder
+// SnapLLM - Visual Workflow Builder
 // Multi-Modal AI Pipeline Orchestration
 // ============================================================================
 

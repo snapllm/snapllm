@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Team Management
+// SnapLLM - Team Management
 // User Roles, Permissions, and Organization Settings
 // ============================================================================
 

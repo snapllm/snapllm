@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Audit Log
+// SnapLLM - Audit Log
 // Activity Tracking and Security Monitoring
 // ============================================================================
 

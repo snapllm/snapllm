@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - API Keys Management
+// SnapLLM - API Keys Management
 // Secure API Key Generation and Management
 // ============================================================================
 

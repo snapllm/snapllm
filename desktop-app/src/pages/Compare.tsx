@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - A/B Model Compare
+// SnapLLM - A/B Model Compare
 // Advanced Side-by-Side Model Comparison with Analytics, ELO Ratings & Charts
 // ============================================================================
 

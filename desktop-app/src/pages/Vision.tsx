@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Vision Studio
+// SnapLLM - Vision Studio
 // Multimodal Image Understanding with Analytics, History & Advanced Features
 // ============================================================================
 

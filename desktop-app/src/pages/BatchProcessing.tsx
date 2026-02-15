@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Batch Processing
+// SnapLLM - Batch Processing
 // Process multiple prompts with tool calling support
 // ============================================================================
 

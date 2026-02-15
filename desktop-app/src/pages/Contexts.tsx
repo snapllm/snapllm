@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - vPID L2 Context Management
+// SnapLLM - vPID L2 Context Management
 // KV Cache Management for O(1) Context Injection
 // ============================================================================
 

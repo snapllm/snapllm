@@ -1,5 +1,5 @@
 // ============================================================================
-// SnapLLM Enterprise - Help & Documentation
+// SnapLLM - Help & Documentation
 // Guides, API Reference, and Support
 // ============================================================================
 

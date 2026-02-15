@@ -1,7 +1,7 @@
 {
   "name": "snapllm-desktop",
-  "version": "1.1.0",
-  "description": "SnapLLM Enterprise - AI Inference Platform with Multi-Model Orchestration",
+  "version": "1.3.0",
+  "description": "SnapLLM - AI Inference Platform with Multi-Model Orchestration",
   "type": "module",
   "scripts": {
     "dev": "vite",
