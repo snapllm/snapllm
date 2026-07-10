@@ -5,7 +5,7 @@
 <h1 align="center">High-Performance Multi-Model LLM Inference Engine with Sub-Millisecond Model Switching, </br> Switch models in a snap! with Desktop UI, CLI & API</h1>
 
 <p align="center">
-  <strong>Arxiv Paper Link to be added</strong></br>
+  <strong>Preprint Paper Link [to be added](https://doi.org/10.32388/7MLDM5)</strong></br>
   <strong>🤩 Star this repository - It helps others discover SnapLLM 🤩</strong>
 </p>
 
