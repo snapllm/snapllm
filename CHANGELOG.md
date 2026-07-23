@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-07-23
+
+### Fixed
+
+- CI browser health assertions now validate the API contract without pinning an
+  obsolete patch version.
+- Tauri Cargo metadata and lockfile versions are synchronized.
+
 ## [1.3.4] - 2026-07-23
 
 ### Fixed

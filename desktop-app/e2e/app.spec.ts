@@ -37,7 +37,9 @@ test('all public UI routes render without runtime errors', async ({ page }) => {
 test('development proxy reaches the API and Playground executes health', async ({ page }) => {
   const response = await page.request.get('/health');
   expect(response.ok()).toBeTruthy();
-  await expect(response.json()).resolves.toMatchObject({ status: 'ok', version: '1.3.1' });
+  const health = await response.json();
+  expect(health).toMatchObject({ status: 'ok' });
+  expect(health.version).toMatch(/^\d+\.\d+\.\d+$/);
 
   await page.goto('/playground');
   await page.getByRole('button', { name: /send request/i }).click();
