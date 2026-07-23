@@ -5,6 +5,17 @@
 #include <limits>
 
 namespace snapllm::limits {
+
+namespace {
+
+bool has_windows_unc_or_device_prefix(const std::filesystem::path& path) {
+    const auto value = path.generic_u8string();
+    return value.size() >= 2 &&
+           ((value[0] == '/' && value[1] == '/') ||
+            (value[0] == '\\' && value[1] == '\\'));
+}
+
+}  // namespace
 namespace {
 
 bool is_valid_nonempty_size(std::size_t bytes, std::size_t maximum) noexcept {
@@ -163,7 +174,7 @@ std::optional<std::vector<std::uint8_t>> decode_base64_strict(
 std::optional<std::filesystem::path> canonical_path_within_roots(
     const std::vector<std::filesystem::path>& roots,
     const std::filesystem::path& candidate) noexcept {
-    if (candidate.empty()) {
+    if (candidate.empty() || has_windows_unc_or_device_prefix(candidate)) {
         return std::nullopt;
     }
 

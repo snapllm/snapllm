@@ -6,7 +6,8 @@ on:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    # Pin the image that includes the Visual Studio 2022 generator used below.
+    runs-on: windows-2022
     steps:
       - name: Enable long paths
         run: git config --global core.longpaths true

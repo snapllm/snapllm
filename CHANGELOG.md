@@ -7,6 +7,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-07-23
+
+### Fixed
+
+- Cross-platform path regression tests now reject Windows UNC/device paths on
+  POSIX hosts.
+- CI uses the Windows 2022 runner that provides the Visual Studio generator.
+- The npm lockfile now includes Linux optional `@emnapi` packages required by
+  `npm ci`.
+
 ## [1.3.2] - 2026-07-23
 
 ### Fixed
