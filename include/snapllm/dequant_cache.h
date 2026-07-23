@@ -2,8 +2,10 @@
  * @file dequant_cache.h
  * @brief Dequantized Weight Cache - Zero Dequantization Overhead
  * 
- * Pre-dequantizes all model weights at startup and stores them in vPID workspace.
- * Eliminates runtime dequantization overhead (30-50× speedup).
+ * Indexes model metadata associated with a vPID workspace.
+ *
+ * Direct GGUF parsing/dequantization through this class is intentionally
+ * unavailable. Production model loading is owned by VPIDBridge/llama.cpp.
  */
 
 #pragma once
@@ -60,26 +62,24 @@ struct ModelInfo {
 /**
  * @brief Dequantized Cache Manager
  * 
- * Core innovation: Dequantize ONCE at startup, store in vPID, zero overhead at inference.
+ * Dequantize at startup and store reusable tensors in the vPID workspace.
  * 
  * Strategy:
  * 1. Load GGUF model (quantized)
- * 2. Dequantize ALL tensors to F32 (one-time cost: 5-10s)
+ * 2. Dequantize tensors to F32
  * 3. Store F32 in vPID workspace (persistent across sessions)
- * 4. Inference just reads F32 (zero dequantization!)
+ * 4. Reuse the cached F32 representation during inference
  * 
- * Result: 30-50× faster inference after warmup!
+ * Runtime performance depends on the model, hardware, and cache state.
  * 
  * Example:
  * @code
  * DequantCache cache(vpid_workspace);
  * 
- * // One-time: Load and dequantize (takes 8s for 7B model)
- * cache.load_model("llama3-8b", "models/llama3-8b-q5.gguf");
+ * // Production code registers models after VPIDBridge/llama.cpp loads them.
  * 
- * // Inference: Get F32 weights (instant!)
- * const float* weights = cache.get_tensor("llama3-8b", "blk.0.attn_q.weight");
- * // Use weights directly - already F32!
+ * Direct tensor pointers are intentionally internal to VPIDBridge so their
+ * lifetime remains protected by the bridge's model lifecycle lock.
  * @endcode
  */
 class DequantCache {
@@ -89,18 +89,10 @@ public:
      * @param vpid vPID workspace for storage
      */
     explicit DequantCache(std::shared_ptr<VPIDWorkspace> vpid);
-    
-    /**
-     * @brief Load model and dequantize to vPID
-     * @param model_name Friendly name for model
-     * @param gguf_path Path to GGUF file
-     * @param force_reload Force reload even if exists in cache
-     * @return true if successful
-     */
-    bool load_model(const std::string& model_name,
-                    const std::string& gguf_path,
-                    bool force_reload = false);
-    
+
+private:
+    friend class VPIDBridge;
+
     /**
      * @brief Unload model from memory (keeps in vPID)
      * @param model_name Model to unload
@@ -190,7 +182,6 @@ public:
      */
     std::shared_ptr<VPIDWorkspace> get_vpid() { return vpid_; }
 
-private:
     std::shared_ptr<VPIDWorkspace> vpid_;
     std::unordered_map<std::string, ModelInfo> models_;
     mutable std::mutex cache_mutex_;
@@ -206,8 +197,6 @@ private:
     std::vector<float> dequantize_q8_0(const void* data, size_t num_elements);
     std::vector<float> dequantize_f16(const void* data, size_t num_elements);
     
-    // GGUF parsing (simplified - full implementation would use llama.cpp)
-    bool parse_gguf(const std::string& path, ModelInfo& model_info);
 };
 
 } // namespace snapllm

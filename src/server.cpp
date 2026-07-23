@@ -22,10 +22,20 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
+#include <shellapi.h>
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "shell32.lib")
+#else
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 #include "snapllm/server.h"
+#include "snapllm/server_limits.h"
+#include "snapllm/server_security.h"
+#include "snapllm/version.h"
 #include "snapllm/websocket.h"
 #include "snapllm/workspace_paths.h"
 #include "snapllm/model_types.h"
@@ -57,12 +67,201 @@ namespace fs = std::filesystem;
 #include <cstring>
 #include <cctype>
 #include <fstream>
+#include <limits>
+#include <cmath>
+#include <cstdio>
 #include <vector>
 #include <thread>
 
 using json = nlohmann::ordered_json;
 
 namespace snapllm {
+namespace {
+
+bool read_bounded_integer(
+    const json& object,
+    const char* field,
+    std::int64_t default_value,
+    std::int64_t minimum,
+    std::int64_t maximum,
+    int& result,
+    std::string& error) {
+    std::int64_t value = default_value;
+    if (object.contains(field)) {
+        const json& input = object[field];
+        if (input.is_number_unsigned()) {
+            const auto unsigned_value = input.get<std::uint64_t>();
+            if (unsigned_value >
+                static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
+                error = std::string("'") + field + "' is outside the supported integer range";
+                return false;
+            }
+            value = static_cast<std::int64_t>(unsigned_value);
+        } else if (input.is_number_integer()) {
+            value = input.get<std::int64_t>();
+        } else {
+            error = std::string("'") + field + "' must be an integer";
+            return false;
+        }
+    }
+    if (value < minimum || value > maximum) {
+        error = std::string("'") + field + "' must be between " +
+                std::to_string(minimum) + " and " + std::to_string(maximum);
+        return false;
+    }
+    result = static_cast<int>(value);
+    return true;
+}
+
+bool read_bounded_float(
+    const json& object,
+    const char* field,
+    double default_value,
+    double minimum,
+    double maximum,
+    float& result,
+    std::string& error) {
+    double value = default_value;
+    if (object.contains(field)) {
+        const json& input = object[field];
+        if (!input.is_number()) {
+            error = std::string("'") + field + "' must be a number";
+            return false;
+        }
+        value = input.get<double>();
+    }
+    if (!std::isfinite(value) || value < minimum || value > maximum) {
+        error = std::string("'") + field + "' must be finite and between " +
+            std::to_string(minimum) + " and " + std::to_string(maximum);
+        return false;
+    }
+    result = static_cast<float>(value);
+    return true;
+}
+
+bool read_bounded_string(
+    const json& object,
+    const char* field,
+    std::string_view default_value,
+    std::size_t maximum_bytes,
+    bool allow_empty,
+    std::string& result,
+    std::string& error) {
+    if (!object.contains(field)) {
+        result.assign(default_value);
+        if ((!allow_empty && result.empty()) || result.size() > maximum_bytes) {
+            error = std::string("'") + field + "' has an invalid length";
+            return false;
+        }
+        return true;
+    }
+    if (!object[field].is_string()) {
+        error = std::string("'") + field + "' must be a string";
+        return false;
+    }
+    result = object[field].get<std::string>();
+    if ((!allow_empty && result.empty()) || result.size() > maximum_bytes) {
+        error = std::string("'") + field + "' has an invalid length";
+        return false;
+    }
+    return true;
+}
+
+bool read_bounded_string_alias(
+    const json& object,
+    const char* primary_field,
+    const char* fallback_field,
+    std::string_view default_value,
+    std::size_t maximum_bytes,
+    bool allow_empty,
+    std::string& result,
+    std::string& error) {
+    if (object.contains(primary_field)) {
+        return read_bounded_string(
+            object, primary_field, default_value, maximum_bytes,
+            allow_empty, result, error);
+    }
+    return read_bounded_string(
+        object, fallback_field, default_value, maximum_bytes,
+        allow_empty, result, error);
+}
+
+bool validate_text_messages(
+    const json& messages,
+    std::string& error,
+    std::size_t& total_text_bytes) {
+    if (!messages.is_array() ||
+        !limits::is_valid_message_count(messages.size())) {
+        error = "'messages' must contain between 1 and " +
+                std::to_string(limits::kMaximumMessages) + " entries";
+        return false;
+    }
+
+    total_text_bytes = 0;
+    for (const auto& message : messages) {
+        if (!message.is_object() || !message.contains("content") ||
+            !message["content"].is_string()) {
+            error = "Each message must be an object with string 'content'";
+            return false;
+        }
+        if (message.contains("role") && !message["role"].is_string()) {
+            error = "Each message 'role' must be a string";
+            return false;
+        }
+        const std::size_t content_bytes =
+            message["content"].get_ref<const std::string&>().size();
+        if (!limits::is_valid_message_size(content_bytes, true) ||
+            total_text_bytes > limits::kMaximumPromptBytes - content_bytes) {
+            error = "Message content exceeds the request limits";
+            return false;
+        }
+        total_text_bytes += content_bytes;
+    }
+    return true;
+}
+
+std::vector<fs::path> request_path_roots(const ServerConfig& config) {
+    return {
+        fs::path(config.default_models_path),
+        fs::path(config.workspace_root)
+    };
+}
+
+int hex_digit_value(char value) {
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+    return -1;
+}
+
+std::optional<std::string> decode_model_path_component(std::string_view encoded) {
+    if (encoded.empty() || encoded.size() > limits::kMaximumStringBytes) {
+        return std::nullopt;
+    }
+    std::string decoded;
+    decoded.reserve(encoded.size());
+    for (size_t index = 0; index < encoded.size(); ++index) {
+        unsigned char value = static_cast<unsigned char>(encoded[index]);
+        if (value == '%') {
+            if (index + 2 >= encoded.size()) return std::nullopt;
+            const int high = hex_digit_value(encoded[index + 1]);
+            const int low = hex_digit_value(encoded[index + 2]);
+            if (high < 0 || low < 0) return std::nullopt;
+            value = static_cast<unsigned char>((high << 4) | low);
+            index += 2;
+        } else if (value == '+') {
+            value = ' ';
+        }
+        if (value < 0x20 || value == 0x7f || value == '/' || value == '\\') {
+            return std::nullopt;
+        }
+        decoded.push_back(static_cast<char>(value));
+    }
+    return !limits::is_valid_identifier_component(decoded) ? std::nullopt
+                           : std::optional<std::string>(std::move(decoded));
+}
+
+}  // namespace
 
 // Get default workspace path based on OS
 static std::string get_default_workspace() {
@@ -135,6 +334,56 @@ static std::string resolve_workspace(const std::string& workspace_root) {
     return workspace_root.empty() ? get_default_workspace() : workspace_root;
 }
 
+static std::string http_origin_for(const std::string& host, int port) {
+    std::string authority = host;
+    if (authority.find(':') != std::string::npos &&
+        !(authority.front() == '[' && authority.back() == ']')) {
+        authority = "[" + authority + "]";
+    }
+    return "http://" + authority + ":" + std::to_string(port);
+}
+
+static bool is_safe_host_header(std::string_view value) {
+    if (value.empty() || value.size() > 512) {
+        return false;
+    }
+    for (char character : value) {
+        const auto byte = static_cast<unsigned char>(character);
+        if (byte < 0x21U || byte > 0x7eU ||
+            character == '/' || character == '\\' ||
+            character == '@' || character == '?' || character == '#') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool open_url_without_shell(const std::string& url) {
+#ifdef _WIN32
+    const auto result = reinterpret_cast<std::intptr_t>(
+        ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+    return result > 32;
+#else
+    const pid_t child = fork();
+    if (child < 0) {
+        return false;
+    }
+    if (child == 0) {
+#ifdef __APPLE__
+        execlp("open", "open", url.c_str(), static_cast<char*>(nullptr));
+#else
+        execlp("xdg-open", "xdg-open", url.c_str(), static_cast<char*>(nullptr));
+#endif
+        _exit(127);
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) < 0) {
+        return false;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#endif
+}
+
 static json build_persisted_config(const ServerConfig& config) {
     return json{
         {"schema_version", 1},
@@ -159,31 +408,67 @@ static json build_persisted_config(const ServerConfig& config) {
 }
 
 static bool write_config_file(const std::string& path, const json& payload, std::string& error) {
+    static std::mutex config_write_mutex;
+    std::lock_guard<std::mutex> write_lock(config_write_mutex);
+    fs::path temp_path;
     try {
         fs::path target(path);
         if (target.has_parent_path()) {
             fs::create_directories(target.parent_path());
         }
-        fs::path temp_path = target;
-        temp_path += ".tmp";
+        std::random_device random;
+        temp_path = target;
+        temp_path += ".tmp." + std::to_string(random()) + "." +
+            std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count());
 
-        std::ofstream out(temp_path, std::ios::binary);
+        std::ofstream out(temp_path, std::ios::binary | std::ios::trunc);
         if (!out) {
             error = "Failed to open config file for writing";
             return false;
         }
-        out << payload.dump(2);
-        out.close();
-
-        std::error_code ec;
-        fs::rename(temp_path, target, ec);
-        if (ec) {
+        const std::string serialized = payload.dump(2);
+        out.write(serialized.data(), static_cast<std::streamsize>(serialized.size()));
+        out.flush();
+        if (!out) {
+            out.close();
             fs::remove(temp_path);
-            error = "Failed to write config file: " + ec.message();
+            error = "Failed to write complete config file";
             return false;
         }
+        out.close();
+        if (!out) {
+            fs::remove(temp_path);
+            error = "Failed to close config file";
+            return false;
+        }
+
+#ifdef _WIN32
+        if (!MoveFileExW(
+                temp_path.wstring().c_str(),
+                target.wstring().c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            const auto code = GetLastError();
+            fs::remove(temp_path);
+            error = "Failed to replace config file (Windows error " +
+                std::to_string(code) + ")";
+            return false;
+        }
+#else
+        if (std::rename(temp_path.c_str(), target.c_str()) != 0) {
+            const int code = errno;
+            fs::remove(temp_path);
+            error = "Failed to replace config file: " +
+                std::error_code(code, std::generic_category()).message();
+            return false;
+        }
+#endif
         return true;
     } catch (const std::exception& e) {
+        if (!temp_path.empty()) {
+            std::error_code ignored;
+            fs::remove(temp_path, ignored);
+        }
         error = e.what();
         return false;
     }
@@ -192,8 +477,6 @@ static bool write_config_file(const std::string& path, const json& payload, std:
 // Constants
 static constexpr const char* MIMETYPE_JSON = "application/json; charset=utf-8";
 static constexpr const char* MIMETYPE_SSE = "text/event-stream";
-static constexpr const char* SNAPLLM_VERSION = "1.1.0";
-
 // Shared DiffusionBridge instance (initialized lazily)
 #ifdef SNAPLLM_HAS_DIFFUSION
 static DiffusionBridge* get_diffusion_bridge(const std::string& workspace_root) {
@@ -303,6 +586,64 @@ SnapLLMServer::SnapLLMServer(const ServerConfig& config)
     , svr_(std::make_unique<httplib::Server>())
     , start_time_(std::chrono::steady_clock::now())
 {
+    if (!security::is_valid_bind_host(config_.host)) {
+        throw std::invalid_argument("Invalid server bind host");
+    }
+    if (config_.port < 1 || config_.port > 65535) {
+        throw std::invalid_argument("Server port must be between 1 and 65535");
+    }
+    if (!config_.api_key.empty() && !security::meets_api_key_policy(config_.api_key)) {
+        throw std::invalid_argument(
+            "SNAPLLM_API_KEY must contain 32-4096 visible ASCII characters");
+    }
+    if (!security::is_loopback_host(config_.host) && config_.api_key.empty()) {
+        throw std::invalid_argument(
+            "A strong API key is required when binding SnapLLM beyond loopback");
+    }
+    const char* network_guard = std::getenv("SNAPLLM_NETWORK_GUARD");
+    if (!security::is_loopback_host(config_.host) &&
+        (!network_guard || !security::is_valid_network_guard(network_guard))) {
+        throw std::invalid_argument(
+            "Non-loopback binds require SNAPLLM_NETWORK_GUARD=reverse-proxy "
+            "or loopback-port-publish");
+    }
+    if (config_.max_payload_bytes == 0 ||
+        config_.max_payload_bytes > 256ULL * 1024ULL * 1024ULL) {
+        throw std::invalid_argument("HTTP payload limit must be between 1 byte and 256 MiB");
+    }
+    if (config_.max_concurrent_requests < 1 ||
+        config_.max_concurrent_requests > 128) {
+        throw std::invalid_argument("HTTP worker count must be between 1 and 128");
+    }
+    const size_t http_workers = static_cast<size_t>(config_.max_concurrent_requests);
+    const size_t maximum_queued_requests = http_workers * 4;
+    svr_->new_task_queue = [http_workers, maximum_queued_requests] {
+        return new httplib::ThreadPool(http_workers, maximum_queued_requests);
+    };
+
+    std::vector<std::string> effective_origins{
+        http_origin_for(config_.host, config_.port)
+    };
+    if (security::is_loopback_host(config_.host)) {
+        effective_origins.push_back("tauri://localhost");
+        effective_origins.push_back("https://tauri.localhost");
+    }
+    if (config_.cors_enabled) {
+        effective_origins.insert(
+            effective_origins.end(),
+            config_.allowed_origins.begin(),
+            config_.allowed_origins.end());
+    }
+    config_.allowed_origins = std::move(effective_origins);
+
+    svr_->set_payload_max_length(config_.max_payload_bytes);
+    // Bound receipt of unauthenticated headers/bodies independently from
+    // potentially long inference and response-write durations.
+    constexpr time_t kRequestReadTimeoutSeconds = 2;
+    svr_->set_read_timeout(kRequestReadTimeoutSeconds, 0);
+    svr_->set_write_timeout(config_.timeout_seconds, 0);
+    svr_->set_idle_interval(5, 0);
+
     // Resolve workspace_root if empty
     if (config_.workspace_root.empty()) {
         config_.workspace_root = resolve_workspace(config.workspace_root);
@@ -428,16 +769,16 @@ bool SnapLLMServer::start() {
     std::cout << "    POST /v1/messages                 - Messages API (Anthropic/Claude Code)\n";
     std::cout << "    GET  /api/v1/models               - List models (extended)\n";
     std::cout << "    POST /api/v1/models/load          - Load model\n";
-    std::cout << "    POST /api/v1/models/switch        - Switch model (<1ms)\n";
+    std::cout << "    POST /api/v1/models/switch        - Select a loaded model\n";
     std::cout << "    POST /api/v1/models/unload        - Unload model\n";
     std::cout << "    GET  /api/v1/models/cache/stats   - Cache statistics\n";
-    std::cout << "    GET  /ws/stream                   - WebSocket streaming\n";
-    std::cout << "    POST /api/v1/models/cache/clear   - Clear cache\n";
+    std::cout << "    GET  /ws/stream                   - Unsupported; use SSE streaming\n";
+    std::cout << "    POST /api/v1/models/cache/clear   - Unsupported in this runtime\n";
     std::cout << "    POST /api/v1/generate             - Text generation\n";
     std::cout << "    POST /api/v1/generate/batch       - Batch generation\n";
 #ifdef SNAPLLM_HAS_DIFFUSION
     std::cout << "    POST /api/v1/diffusion/generate   - Image generation\n";
-    std::cout << "    POST /api/v1/diffusion/video      - Video generation\n";
+    std::cout << "    POST /api/v1/diffusion/video      - Unsupported in this runtime\n";
 #endif
 #ifdef SNAPLLM_HAS_MULTIMODAL
     std::cout << "    POST /api/v1/vision/generate      - Vision/multimodal\n";
@@ -447,7 +788,7 @@ bool SnapLLMServer::start() {
     std::cout << "    POST /api/v1/contexts/ingest      - Ingest context (pre-compute KV)\n";
     std::cout << "    GET  /api/v1/contexts             - List contexts\n";
     std::cout << "    GET  /api/v1/contexts/:id         - Get context info\n";
-    std::cout << "    POST /api/v1/contexts/:id/query   - Query with cached context (O(1))\n";
+    std::cout << "    POST /api/v1/contexts/:id/query   - Query with cached context\n";
     std::cout << "    DELETE /api/v1/contexts/:id       - Delete context\n";
     std::cout << "    POST /api/v1/contexts/:id/promote - Promote to hot tier\n";
     std::cout << "    POST /api/v1/contexts/:id/demote  - Demote to cold tier\n";
@@ -471,15 +812,12 @@ bool SnapLLMServer::start() {
         std::thread([url]() {
             // Brief delay to let the server socket bind
             std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-#ifdef _WIN32
-            std::string cmd = "start \"\" \"" + url + "\"";
-#elif defined(__APPLE__)
-            std::string cmd = "open \"" + url + "\"";
-#else
-            std::string cmd = "xdg-open \"" + url + "\" 2>/dev/null || true";
-#endif
-            std::system(cmd.c_str());
-            std::cout << "[Server] Opened Web UI in browser: " << url << std::endl;
+            if (open_url_without_shell(url)) {
+                std::cout << "[Server] Opened Web UI in browser: " << url << std::endl;
+            } else {
+                std::cerr << "[Server] Could not open Web UI automatically; visit: "
+                          << url << std::endl;
+            }
         }).detach();
     }
 
@@ -516,63 +854,57 @@ std::shared_ptr<ModelManager> SnapLLMServer::get_model_manager() {
 // ============================================================================
 
 void SnapLLMServer::setup_middleware() {
-    // Pre-routing handler for CORS and OPTIONS preflight
-    svr_->set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
-        // Add CORS headers
-        if (config_.cors_enabled) {
-            std::string origin = req.get_header_value("Origin");
-            res.set_header("Access-Control-Allow-Origin", origin.empty() ? "*" : origin);
-            res.set_header("Access-Control-Allow-Credentials", "true");
-        }
-
-        // Handle OPTIONS preflight requests
-        if (req.method == "OPTIONS") {
-            res.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-            res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
-            res.set_header("Access-Control-Max-Age", "86400");
-            res.set_content("", "text/plain");
-            return httplib::Server::HandlerResponse::Handled;
-        }
-
-        return httplib::Server::HandlerResponse::Unhandled;
-    });
-
-    // Error handler (also serves SPA fallback for Web UI)
-    svr_->set_error_handler([this](const httplib::Request& req, httplib::Response& res) {
-        if (req.method == "POST" && dispatch_post(req, res)) {
-            return;
-        }
-        // SPA fallback: serve index.html for non-API GET requests (React Router)
-        if (!config_.ui_dir.empty() && res.status == 404 && req.method == "GET" &&
-            req.path.find("/api/") == std::string::npos &&
-            req.path.find("/v1/") == std::string::npos &&
-            req.path.find("/health") == std::string::npos &&
-            req.path.find("/ws/") == std::string::npos) {
-            auto index_path = fs::path(config_.ui_dir) / "index.html";
-            if (fs::exists(index_path)) {
-                std::ifstream file(index_path, std::ios::binary);
-                if (file) {
-                    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-                    res.status = 200;
-                    res.set_content(content, "text/html");
-                    return;
-                }
-            }
-        }
-        std::string msg = "Not found: " + req.path;
-        send_error(res, msg, "not_found", 404);
-    });
-
     // Exception handler
     svr_->set_exception_handler([this](const httplib::Request& req, httplib::Response& res, std::exception_ptr ep) {
         try {
             std::rethrow_exception(ep);
         } catch (const std::exception& e) {
-            send_error(res, std::string("Server error: ") + e.what(), "server_error", 500);
+            std::cerr << "[SnapLLM Server] Unhandled request exception: "
+                      << e.what() << std::endl;
+            send_error(res, "Internal server error", "server_error", 500);
         } catch (...) {
             send_error(res, "Unknown server error", "server_error", 500);
         }
     });
+}
+
+bool SnapLLMServer::authorize_request(
+    const httplib::Request& req,
+    httplib::Response& res,
+    bool require_authentication
+) {
+    const std::string host = req.get_header_value("Host");
+    if (!is_safe_host_header(host) ||
+        (security::is_loopback_host(config_.host) &&
+         !security::is_valid_loopback_host_header(
+             host, static_cast<std::uint16_t>(config_.port)))) {
+        send_error(res, "Invalid Host header", "invalid_request_error", 400);
+        return false;
+    }
+
+    const std::string origin = req.get_header_value("Origin");
+    if (!origin.empty()) {
+        if (!security::is_browser_origin_allowed(origin, config_.allowed_origins)) {
+            send_error(res, "Browser origin is not allowed", "forbidden", 403);
+            return false;
+        }
+        res.set_header("Access-Control-Allow-Origin", origin);
+        res.set_header("Vary", "Origin");
+    }
+
+    if (require_authentication && !config_.api_key.empty()) {
+        const bool authorized =
+            security::bearer_api_key_matches(
+                req.get_header_value("Authorization"), config_.api_key) ||
+            security::x_api_key_matches(
+                req.get_header_value("X-API-Key"), config_.api_key);
+        if (!authorized) {
+            res.set_header("WWW-Authenticate", "Bearer");
+            send_error(res, "Authentication required", "authentication_error", 401);
+            return false;
+        }
+    }
+    return true;
 }
 
 // ============================================================================
@@ -580,6 +912,9 @@ void SnapLLMServer::setup_middleware() {
 // ============================================================================
 
 bool SnapLLMServer::dispatch_post(const httplib::Request& req, httplib::Response& res) {
+    if (!authorize_request(req, res, true)) {
+        return true;
+    }
     const std::string& path = req.path;
 
     if (path == "/api/v1/config") {
@@ -691,6 +1026,19 @@ void SnapLLMServer::setup_routes() {
             send_error(res, "Not found: " + req.path, "not_found", 404);
         }
     });
+    svr_->Options(R"(/(.*))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, false)) return;
+        if (req.get_header_value("Origin").empty()) {
+            send_error(res, "CORS preflight requires an allowed Origin", "forbidden", 403);
+            return;
+        }
+        res.status = 204;
+        res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+        res.set_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-API-Key");
+        res.set_header("Access-Control-Max-Age", "600");
+    });
 
     std::cout << "[Server] Registered catch-all POST handler" << std::endl;
 
@@ -700,11 +1048,12 @@ void SnapLLMServer::setup_routes() {
 
     // API info endpoint (always available)
     svr_->Get("/api", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         json response = {
             {"name", "SnapLLM API"},
             {"version", SNAPLLM_VERSION},
             {"status", "running"},
-            {"description", "High-performance multi-model LLM inference with <1ms switching"},
+            {"description", "Local multi-model LLM inference with resident model selection"},
             {"endpoints", {
                 {"health", "/health"},
                 {"models", "/api/v1/models"},
@@ -721,6 +1070,7 @@ void SnapLLMServer::setup_routes() {
 
     // Root path - serve Web UI index.html if available, otherwise API info
     svr_->Get("/", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, false)) return;
         if (!config_.ui_dir.empty()) {
             auto index_path = fs::path(config_.ui_dir) / "index.html";
             if (fs::exists(index_path)) {
@@ -737,7 +1087,7 @@ void SnapLLMServer::setup_routes() {
             {"name", "SnapLLM API"},
             {"version", SNAPLLM_VERSION},
             {"status", "running"},
-            {"description", "High-performance multi-model LLM inference with <1ms switching"},
+            {"description", "Local multi-model LLM inference with resident model selection"},
             {"ui", config_.ui_dir.empty() ? "not configured" : "enabled at /"},
             {"endpoints", {
                 {"health", "/health"},
@@ -753,14 +1103,17 @@ void SnapLLMServer::setup_routes() {
         send_json(res, response.dump());
     });
     svr_->Get("/health", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, false)) return;
         handle_health(req, res);
     });
     svr_->Get("/v1/health", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, false)) return;
         handle_health(req, res);
     });
 
     // Config and recommendations endpoints for Settings page
     svr_->Get("/api/v1/config", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         json response = {
             {"status", "success"},
             {"max_models", config_.max_models},
@@ -793,6 +1146,7 @@ void SnapLLMServer::setup_routes() {
         send_json(res, response.dump());
     });
     svr_->Get("/api/v1/config/recommendations", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         // Get system memory info
         size_t total_ram_mb = 32768;  // Default 32GB
 #ifdef _WIN32
@@ -818,66 +1172,99 @@ void SnapLLMServer::setup_routes() {
     });
     // Server metrics endpoint for Dashboard
     svr_->Get("/api/v1/server/metrics", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         handle_server_metrics(req, res);
     });
     svr_->Get("/v1/models", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         handle_models_openai(req, res);
     });
     svr_->Get("/api/v1/models", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         handle_models_extended(req, res);
     });
     svr_->Get("/api/v1/models/", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         handle_models_extended(req, res);
     });
     svr_->Get("/api/v1/models/cache/stats", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         handle_cache_stats(req, res);
     });
     svr_->Get("/api/v1/contexts", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         handle_context_list(req, res);
     });
     svr_->Get("/api/v1/contexts/stats", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         handle_context_stats(req, res);
     });
     svr_->Get(R"(/api/v1/contexts/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         std::string context_id = req.matches[1];
         handle_context_get(req, res, context_id);
     });
     svr_->Get("/ws/stream", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         handle_websocket_upgrade(req, res);
     });
 
 #ifdef SNAPLLM_HAS_DIFFUSION
     svr_->Get(R"(/api/v1/images/([^/]+\.png))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         std::string filename = req.matches[1];
-        std::string images_dir = config_.workspace_root + "/images";
-        std::string filepath = images_dir + "/" + filename;
-        if (!fs::exists(filepath)) {
+        const fs::path images_dir = fs::path(config_.workspace_root) / "images";
+        auto filepath = security::canonical_path_within_root(
+            images_dir, images_dir / filename);
+        if (!filepath || !fs::exists(*filepath)) {
             send_error(res, "Image not found: " + filename, "not_found", 404);
             return;
         }
-        std::ifstream file(filepath, std::ios::binary);
+        const auto file_size = limits::bounded_regular_file_size(*filepath);
+        if (!file_size) {
+            send_error(res, "Image is not a bounded regular file", "invalid_asset", 413);
+            return;
+        }
+        std::ifstream file(*filepath, std::ios::binary);
         if (!file) {
             send_error(res, "Failed to read image", "server_error", 500);
             return;
         }
-        std::vector<char> buffer(std::istreambuf_iterator<char>(file), {});
+        std::vector<char> buffer(static_cast<std::size_t>(*file_size));
+        if (!buffer.empty() &&
+            !file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()))) {
+            send_error(res, "Failed to read image", "server_error", 500);
+            return;
+        }
         res.set_content(buffer.data(), buffer.size(), "image/png");
     });
     svr_->Get(R"(/api/v1/videos/([^/]+)/([^/]+\.png))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         std::string video_id = req.matches[1];
         std::string filename = req.matches[2];
-        std::string videos_dir = config_.workspace_root + "/videos";
-        std::string filepath = videos_dir + "/" + video_id + "/" + filename;
-        if (!fs::exists(filepath)) {
+        const fs::path videos_dir = fs::path(config_.workspace_root) / "videos";
+        auto filepath = security::canonical_path_within_root(
+            videos_dir, videos_dir / video_id / filename);
+        if (!filepath || !fs::exists(*filepath)) {
             send_error(res, "Frame not found: " + filename, "not_found", 404);
             return;
         }
-        std::ifstream file(filepath, std::ios::binary);
+        const auto file_size = limits::bounded_regular_file_size(*filepath);
+        if (!file_size) {
+            send_error(res, "Frame is not a bounded regular file", "invalid_asset", 413);
+            return;
+        }
+        std::ifstream file(*filepath, std::ios::binary);
         if (!file) {
             send_error(res, "Failed to read frame", "server_error", 500);
             return;
         }
-        std::vector<char> buffer(std::istreambuf_iterator<char>(file), {});
+        std::vector<char> buffer(static_cast<std::size_t>(*file_size));
+        if (!buffer.empty() &&
+            !file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()))) {
+            send_error(res, "Failed to read frame", "server_error", 500);
+            return;
+        }
         res.set_content(buffer.data(), buffer.size(), "image/png");
     });
 #endif
@@ -889,23 +1276,15 @@ void SnapLLMServer::setup_routes() {
     // =========================================================================
 
     svr_->Delete(R"(/api/v1/models/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
-        std::string name = req.matches[1];
-        // URL decode the name (handle %20, etc.)
-        std::string decoded_name;
-        for (size_t i = 0; i < name.length(); ++i) {
-            if (name[i] == '%' && i + 2 < name.length()) {
-                int hex = std::stoi(name.substr(i + 1, 2), nullptr, 16);
-                decoded_name += static_cast<char>(hex);
-                i += 2;
-            } else if (name[i] == '+') {
-                decoded_name += ' ';
-            } else {
-                decoded_name += name[i];
-            }
+        if (!authorize_request(req, res, true)) return;
+        const auto decoded_name = decode_model_path_component(req.matches[1].str());
+        if (!decoded_name) {
+            send_error(res, "Invalid model identifier", "invalid_request_error", 400);
+            return;
         }
-        name = decoded_name;
-
-        std::cout << "[Server] DELETE /api/v1/models/" << name << std::endl;
+        std::string name = *decoded_name;
+        std::cout << "[Server] DELETE model request (" << name.size()
+                  << " identifier bytes)" << std::endl;
 
         bool unloaded = false;
         std::string model_type = "llm";
@@ -954,8 +1333,32 @@ void SnapLLMServer::setup_routes() {
         }
     });
     svr_->Delete(R"(/api/v1/contexts/([^/]+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, true)) return;
         std::string context_id = req.matches[1];
         handle_context_delete(req, res, context_id);
+    });
+
+    // SPA fallback is a normal final GET route. Keeping it out of the global
+    // error handler prevents authentication and Origin failures from being
+    // rewritten or accidentally dispatched a second time.
+    svr_->Get(R"(/(.*))", [this](const httplib::Request& req, httplib::Response& res) {
+        const bool is_api_path =
+            req.path.rfind("/api/", 0) == 0 ||
+            req.path.rfind("/v1/", 0) == 0 ||
+            req.path.rfind("/ws/", 0) == 0;
+        if (!authorize_request(req, res, is_api_path)) return;
+        if (!config_.ui_dir.empty() && !is_api_path) {
+            const auto index_path = fs::path(config_.ui_dir) / "index.html";
+            std::ifstream file(index_path, std::ios::binary);
+            if (file) {
+                std::string content(
+                    (std::istreambuf_iterator<char>(file)),
+                    std::istreambuf_iterator<char>());
+                res.set_content(content, "text/html");
+                return;
+            }
+        }
+        send_error(res, "Not found: " + req.path, "not_found", 404);
     });
 
     std::cout << "[Server] Route registration complete" << std::endl;
@@ -966,9 +1369,6 @@ void SnapLLMServer::setup_routes() {
 // ============================================================================
 
 void SnapLLMServer::handle_health(const httplib::Request&, httplib::Response& res) {
-    auto models = manager_->get_loaded_models();
-    std::string current = manager_->get_current_model();
-
     // Get ISO timestamp string
     auto now = std::chrono::system_clock::now();
     auto time_t_now = std::chrono::system_clock::to_time_t(now);
@@ -979,9 +1379,7 @@ void SnapLLMServer::handle_health(const httplib::Request&, httplib::Response& re
     json response = {
         {"status", "ok"},
         {"version", SNAPLLM_VERSION},
-        {"timestamp", timestamp_iso},
-        {"models_loaded", static_cast<int>(models.size())},
-        {"current_model", current.empty() ? nullptr : json(current)}
+        {"timestamp", timestamp_iso}
     };
 
     send_json(res, response.dump());
@@ -1117,28 +1515,54 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
 
     try {
         json body = json::parse(req.body);
+        if (!body.is_object()) {
+            send_error(res, "Request body must be a JSON object");
+            return;
+        }
 
         // Extract parameters
-        std::string model = body.value("model", manager_->get_current_model());
+        std::string validation_error;
+        std::string model;
+        if (!read_bounded_string(
+                body, "model", manager_->get_current_model(),
+                limits::kMaximumStringBytes, true, model, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
         bool stream = body.value("stream", false);
-        int max_tokens = body.value("max_tokens", 2000);
-        float temperature = body.value("temperature", 0.8f);
-        float top_p = body.value("top_p", 0.95f);
-        int top_k = body.value("top_k", 40);
-        float repeat_penalty = body.value("repeat_penalty", 1.1f);
+        int max_tokens = 0;
+        if (!read_bounded_integer(
+                body, "max_tokens", 2000,
+                limits::kMinimumMaxTokens, limits::kMaximumMaxTokens,
+                max_tokens, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        float temperature = 0.0f;
+        float top_p = 0.0f;
+        float repeat_penalty = 0.0f;
+        int top_k = 0;
+        if (!read_bounded_float(body, "temperature", 0.8, 0.0, 2.0, temperature, validation_error) ||
+            !read_bounded_float(body, "top_p", 0.95, 0.0, 1.0, top_p, validation_error) ||
+            !read_bounded_integer(body, "top_k", 40, 0, 1000, top_k, validation_error) ||
+            !read_bounded_float(body, "repeat_penalty", 1.1, 0.0, 10.0, repeat_penalty, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
 
         // MCB: Option to enable L2 Context caching
         // Memory leak in KVCacheExtractor fixed - contexts now cached per model
         bool use_context_cache = body.value("use_context_cache", true);
 
-        if (!body.contains("messages") || !body["messages"].is_array()) {
+        if (!body.contains("messages")) {
             send_error(res, "Missing 'messages' array in request body");
             return;
         }
-
         const auto& messages = body["messages"];
-        if (messages.empty()) {
-            send_error(res, "Empty 'messages' array in request body");
+        std::size_t total_message_bytes = 0;
+        if (!validate_text_messages(
+                messages, validation_error, total_message_bytes)) {
+            send_error(res, validation_error);
             return;
         }
 
@@ -1166,25 +1590,32 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
         // Query = the last user message only
         std::string context_text;
         std::string query_text;
-        bool found_last_user = false;
-
-        // Find the last user message to use as query
-        for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-            if ((*it).value("role", "") == "user" && !found_last_user) {
-                query_text = (*it).value("content", "");
-                found_last_user = true;
-            }
+        std::vector<std::string> message_roles;
+        message_roles.reserve(messages.size());
+        for (const auto& message : messages) {
+            message_roles.push_back(message.value("role", ""));
+        }
+        std::vector<std::string_view> role_views;
+        role_views.reserve(message_roles.size());
+        for (const auto& role : message_roles) {
+            role_views.push_back(role);
+        }
+        const auto query_index =
+            limits::find_last_role_index(role_views, "user");
+        if (query_index) {
+            query_text = messages[*query_index].value("content", "");
         }
 
         // Build context from all messages except the last user message
-        bool skip_last_user = true;
-        for (const auto& msg : messages) {
+        for (std::size_t message_index = 0;
+             message_index < messages.size();
+             ++message_index) {
+            const auto& msg = messages[message_index];
             std::string role = msg.value("role", "user");
             std::string content = msg.value("content", "");
 
             // Skip the last user message (that's our query)
-            if (skip_last_user && role == "user" && content == query_text) {
-                skip_last_user = false;  // Only skip once
+            if (query_index && message_index == *query_index) {
                 continue;
             }
 
@@ -1214,8 +1645,8 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
 
             if (context_handle.valid) {
                 using_cached_context = true;
-                std::cout << "[SnapLLM MCB] Using cached context for chat, query: "
-                          << query_text.substr(0, 50) << "..." << std::endl;
+                std::cout << "[SnapLLM MCB] Using cached context for chat ("
+                          << query_text.size() << " query bytes)" << std::endl;
             }
         }
 
@@ -1456,7 +1887,7 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
                 }},
                 // vPID L2 context cache indicators (at root level for frontend)
                 {"cache_hit", cache_hit},
-                {"speedup", cache_hit ? "O(1) context lookup" : "standard"},
+                {"speedup", cache_hit ? "indexed cache lookup" : "uncached"},
                 // Legacy x_mcb for backwards compatibility
                 {"x_mcb", {
                     {"cache_hit", cache_hit},
@@ -1467,10 +1898,10 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
             send_json(res, response.dump());
         }
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -1499,17 +1930,47 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
 
     try {
         json body = json::parse(req.body);
+        if (!body.is_object()) {
+            send_error(res, "Request body must be a JSON object");
+            return;
+        }
 
         // Extract parameters (Anthropic format)
-        std::string model = body.value("model", manager_->get_current_model());
+        std::string validation_error;
+        std::string model;
+        if (!read_bounded_string(
+                body, "model", manager_->get_current_model(),
+                limits::kMaximumStringBytes, true, model, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
         bool stream = body.value("stream", false);
-        int max_tokens = body.value("max_tokens", 4096);
-        float temperature = body.value("temperature", 1.0f);
-        float top_p = body.value("top_p", 0.999f);
-        int top_k = body.value("top_k", 0);  // Anthropic uses 0 to disable
+        int max_tokens = 0;
+        if (!read_bounded_integer(
+                body, "max_tokens", 4096,
+                limits::kMinimumMaxTokens, limits::kMaximumMaxTokens,
+                max_tokens, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        float temperature = 0.0f;
+        float top_p = 0.0f;
+        int top_k = 0;
+        if (!read_bounded_float(body, "temperature", 1.0, 0.0, 2.0, temperature, validation_error) ||
+            !read_bounded_float(body, "top_p", 0.999, 0.0, 1.0, top_p, validation_error) ||
+            !read_bounded_integer(body, "top_k", 0, 0, 1000, top_k, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
 
         // System prompt (Anthropic puts it at top level, not in messages)
-        std::string system_prompt = body.value("system", "");
+        std::string system_prompt;
+        if (!read_bounded_string(
+                body, "system", "", limits::kMaximumPromptBytes,
+                true, system_prompt, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
 
         // Extended thinking support (Anthropic feature)
         bool extended_thinking_enabled = false;
@@ -1518,20 +1979,49 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
             std::string thinking_type = body["thinking"].value("type", "");
             if (thinking_type == "enabled") {
                 extended_thinking_enabled = true;
-                thinking_budget_tokens = body["thinking"].value("budget_tokens", 1024);
-                // Ensure minimum budget
-                if (thinking_budget_tokens < 100) thinking_budget_tokens = 100;
-                // Cap at reasonable max
-                if (thinking_budget_tokens > 32000) thinking_budget_tokens = 32000;
+                if (!read_bounded_integer(
+                        body["thinking"], "budget_tokens", 1024, 100, 32000,
+                        thinking_budget_tokens, validation_error)) {
+                    send_error(res, validation_error);
+                    return;
+                }
             }
         }
 
         // Extract tools if provided (Anthropic tool calling)
         std::vector<json> tools;
         bool has_tools = false;
+        if (body.contains("tools") && !body["tools"].is_array()) {
+            send_error(res, "'tools' must be an array");
+            return;
+        }
         if (body.contains("tools") && body["tools"].is_array()) {
+            if (body["tools"].size() > limits::kMaximumBatchItems) {
+                send_error(res, "Too many tool definitions");
+                return;
+            }
             has_tools = true;
             for (const auto& tool : body["tools"]) {
+                if (!tool.is_object()) {
+                    send_error(res, "Each tool definition must be an object");
+                    return;
+                }
+                std::string tool_name;
+                std::string tool_description;
+                if (!read_bounded_string(
+                        tool, "name", "", limits::kMaximumStringBytes, false,
+                        tool_name, validation_error) ||
+                    !read_bounded_string(
+                        tool, "description", "", limits::kMaximumMessageBytes, true,
+                        tool_description, validation_error)) {
+                    send_error(res, validation_error);
+                    return;
+                }
+                if (tool.contains("input_schema") &&
+                    tool["input_schema"].dump().size() > limits::kMaximumMessageBytes) {
+                    send_error(res, "Tool input schema exceeds the request limits");
+                    return;
+                }
                 tools.push_back(tool);
             }
         }
@@ -1558,6 +2048,10 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
             prompt += "To use a tool, respond with a JSON object in this exact format:\n";
             prompt += "```tool_call\n{\"name\": \"tool_name\", \"input\": {\"param1\": \"value1\"}}\n```\n\n";
             prompt += "Only use tools when necessary. If you can answer without tools, do so directly.\n\n";
+            if (prompt.size() > limits::kMaximumPromptBytes) {
+                send_error(res, "Tool definitions exceed the prompt limit");
+                return;
+            }
         }
 
         // Add extended thinking instructions if enabled
@@ -1570,8 +2064,15 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
             prompt += "The thinking section helps you work through complex problems methodically.\n\n";
         }
 
-        if (body.contains("messages") && body["messages"].is_array()) {
+        if (body.contains("messages") && body["messages"].is_array() &&
+            limits::is_valid_message_count(body["messages"].size())) {
+            std::size_t prompt_bytes = prompt.size();
             for (const auto& msg : body["messages"]) {
+                if (!msg.is_object() || !msg.contains("content") ||
+                    (msg.contains("role") && !msg["role"].is_string())) {
+                    send_error(res, "Each message must contain valid 'role' and 'content' fields");
+                    return;
+                }
                 std::string role = msg.value("role", "user");
 
                 // Anthropic content can be string or array of content blocks
@@ -1579,34 +2080,35 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
                 if (msg["content"].is_string()) {
                     content = msg["content"].get<std::string>();
                 } else if (msg["content"].is_array()) {
+                    if (msg["content"].size() > limits::kMaximumMessages) {
+                        send_error(res, "Too many content blocks in a message");
+                        return;
+                    }
                     // Array of content blocks (text, image, tool_use, tool_result, etc.)
                     for (const auto& block : msg["content"]) {
+                        if (!block.is_object() ||
+                            (block.contains("type") && !block["type"].is_string())) {
+                            send_error(res, "Each content block must be an object with a string 'type'");
+                            return;
+                        }
                         std::string block_type = block.value("type", "");
                         if (block_type == "text") {
-                            content += block.value("text", "");
-                        } else if (block_type == "image") {
-                            // Image input for vision models (Anthropic format)
-                            // Format: {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "..."}}
-                            if (block.contains("source") && block["source"].is_object()) {
-                                std::string source_type = block["source"].value("type", "");
-                                if (source_type == "base64") {
-                                    std::string media_type = block["source"].value("media_type", "image/jpeg");
-                                    std::string image_data = block["source"].value("data", "");
-                                    // Add image marker to prompt - the model manager will handle this
-                                    content += "\n[IMAGE: " + media_type + ", " + std::to_string(image_data.length()) + " bytes base64]\n";
-                                    // Store image data for multimodal processing
-                                    // Note: Actual image processing requires SNAPLLM_HAS_MULTIMODAL
-#ifdef SNAPLLM_HAS_MULTIMODAL
-                                    // TODO: Pass image data to multimodal model
-                                    content += "[Image data available for multimodal processing]\n";
-#else
-                                    content += "[Vision model not loaded - image will be described textually]\n";
-#endif
-                                } else if (source_type == "url") {
-                                    std::string image_url = block["source"].value("url", "");
-                                    content += "\n[IMAGE URL: " + image_url + "]\n";
-                                }
+                            std::string text;
+                            if (!read_bounded_string(
+                                    block, "text", "",
+                                    limits::kMaximumMessageBytes, true,
+                                    text, validation_error)) {
+                                send_error(res, validation_error);
+                                return;
                             }
+                            content += text;
+                        } else if (block_type == "image") {
+                            send_error(
+                                res,
+                                "Image content blocks are not supported by the Messages endpoint",
+                                "not_supported",
+                                501);
+                            return;
                         } else if (block_type == "tool_use") {
                             // Assistant's tool call
                             std::string tool_name = block.value("name", "");
@@ -1618,12 +2120,25 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
                             content += "\nTool Result: " + tool_content + "\n";
                         }
                     }
+                } else {
+                    send_error(res, "Message 'content' must be a string or array");
+                    return;
                 }
+                if (!limits::is_valid_message_size(content.size(), true) ||
+                    prompt_bytes > limits::kMaximumPromptBytes - content.size()) {
+                    send_error(res, "Message content exceeds the request limits");
+                    return;
+                }
+                prompt_bytes += content.size();
 
                 if (role == "user") {
                     prompt += "\n\nHuman: " + content;
                 } else if (role == "assistant") {
                     prompt += "\n\nAssistant: " + content;
+                }
+                if (prompt.size() > limits::kMaximumPromptBytes) {
+                    send_error(res, "Combined prompt exceeds the request limits");
+                    return;
                 }
             }
             prompt += "\n\nAssistant:";
@@ -1632,7 +2147,7 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
                 {"type", "error"},
                 {"error", {
                     {"type", "invalid_request_error"},
-                    {"message", "Missing 'messages' array in request body"}
+                    {"message", "'messages' must be a non-empty bounded array"}
                 }}
             };
             res.status = 400;
@@ -1969,22 +2484,24 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
                       << " tokens in " << generation_time << "s" << std::endl;
         }
 
-    } catch (const json::exception& e) {
+    } catch (const json::exception&) {
         json error = {
             {"type", "error"},
             {"error", {
                 {"type", "invalid_request_error"},
-                {"message", std::string("JSON parse error: ") + e.what()}
+                {"message", "Invalid JSON request body"}
             }}
         };
         res.status = 400;
         res.set_content(error.dump(), MIMETYPE_JSON);
     } catch (const std::exception& e) {
+        std::cerr << "[SnapLLM Server] messages request failed: "
+                  << e.what() << std::endl;
         json error = {
             {"type", "error"},
             {"error", {
                 {"type", "api_error"},
-                {"message", std::string("Server error: ") + e.what()}
+                {"message", "Internal server error"}
             }}
         };
         res.status = 500;
@@ -2014,7 +2531,7 @@ void SnapLLMServer::handle_config_update(const httplib::Request& req, httplib::R
         std::vector<std::string> updated_fields;
         std::vector<std::string> restart_required;
 
-        auto update_string = [&](const char* key, std::string& target, std::string& live_target, bool requires_restart, bool allow_empty) {
+        auto update_string = [&](const char* key, std::string& target, bool allow_empty) {
             if (!merged.contains(key)) return true;
             if (!merged[key].is_string()) {
                 send_error(res, std::string("Invalid type for '") + key + "'", "invalid_request_error", 400);
@@ -2028,16 +2545,12 @@ void SnapLLMServer::handle_config_update(const httplib::Request& req, httplib::R
             if (target != value) {
                 target = value;
                 updated_fields.push_back(key);
-                if (requires_restart) {
-                    restart_required.push_back(key);
-                } else {
-                    live_target = value;
-                }
+                restart_required.push_back(key);
             }
             return true;
         };
 
-        auto update_int = [&](const char* key, int& target, int& live_target, bool requires_restart, int min_value, int max_value) {
+        auto update_int = [&](const char* key, int& target, int min_value, int max_value) {
             if (!merged.contains(key)) return true;
             if (!merged[key].is_number_integer()) {
                 send_error(res, std::string("Invalid type for '") + key + "'", "invalid_request_error", 400);
@@ -2051,16 +2564,12 @@ void SnapLLMServer::handle_config_update(const httplib::Request& req, httplib::R
             if (target != value) {
                 target = value;
                 updated_fields.push_back(key);
-                if (requires_restart) {
-                    restart_required.push_back(key);
-                } else {
-                    live_target = value;
-                }
+                restart_required.push_back(key);
             }
             return true;
         };
 
-        auto update_bool = [&](const char* key, bool& target, bool& live_target, bool requires_restart) {
+        auto update_bool = [&](const char* key, bool& target) {
             if (!merged.contains(key)) return true;
             if (!merged[key].is_boolean()) {
                 send_error(res, std::string("Invalid type for '") + key + "'", "invalid_request_error", 400);
@@ -2070,24 +2579,20 @@ void SnapLLMServer::handle_config_update(const httplib::Request& req, httplib::R
             if (target != value) {
                 target = value;
                 updated_fields.push_back(key);
-                if (requires_restart) {
-                    restart_required.push_back(key);
-                } else {
-                    live_target = value;
-                }
+                restart_required.push_back(key);
             }
             return true;
         };
 
-        if (!update_string("host", updated.host, config_.host, true, false)) return;
-        if (!update_int("port", updated.port, config_.port, true, 1, 65535)) return;
-        if (!update_string("workspace_root", updated.workspace_root, config_.workspace_root, true, false)) return;
-        if (!update_string("default_models_path", updated.default_models_path, config_.default_models_path, false, false)) return;
-        if (!update_bool("cors_enabled", updated.cors_enabled, config_.cors_enabled, true)) return;
-        if (!update_int("timeout_seconds", updated.timeout_seconds, config_.timeout_seconds, true, 30, 86400)) return;
-        if (!update_int("max_concurrent_requests", updated.max_concurrent_requests, config_.max_concurrent_requests, true, 1, 128)) return;
-        if (!update_int("max_models", updated.max_models, config_.max_models, false, 1, 64)) return;
-        if (!update_int("default_ram_budget_mb", updated.default_ram_budget_mb, config_.default_ram_budget_mb, false, 512, 1048576)) return;
+        if (!update_string("host", updated.host, false)) return;
+        if (!update_int("port", updated.port, 1, 65535)) return;
+        if (!update_string("workspace_root", updated.workspace_root, false)) return;
+        if (!update_string("default_models_path", updated.default_models_path, false)) return;
+        if (!update_bool("cors_enabled", updated.cors_enabled)) return;
+        if (!update_int("timeout_seconds", updated.timeout_seconds, 30, 86400)) return;
+        if (!update_int("max_concurrent_requests", updated.max_concurrent_requests, 1, 128)) return;
+        if (!update_int("max_models", updated.max_models, 1, 64)) return;
+        if (!update_int("default_ram_budget_mb", updated.default_ram_budget_mb, 512, 1048576)) return;
         if (merged.contains("default_strategy")) {
             if (!merged["default_strategy"].is_string()) {
                 send_error(res, "Invalid type for 'default_strategy'", "invalid_request_error", 400);
@@ -2104,10 +2609,23 @@ void SnapLLMServer::handle_config_update(const httplib::Request& req, httplib::R
             if (updated.default_strategy != normalized) {
                 updated.default_strategy = normalized;
                 updated_fields.push_back("default_strategy");
-                config_.default_strategy = normalized;
+                restart_required.push_back("default_strategy");
             }
         }
-        if (!update_bool("enable_gpu", updated.enable_gpu, config_.enable_gpu, false)) return;
+        if (!update_bool("enable_gpu", updated.enable_gpu)) return;
+
+        if (!security::is_valid_bind_host(updated.host)) {
+            send_error(res, "Invalid server host", "invalid_request_error", 400);
+            return;
+        }
+        if (!security::is_loopback_host(updated.host) && config_.api_key.empty()) {
+            send_error(
+                res,
+                "A strong API key is required before configuring a non-loopback host",
+                "invalid_request_error",
+                400);
+            return;
+        }
 
         std::string error;
         json payload = build_persisted_config(updated);
@@ -2124,39 +2642,141 @@ void SnapLLMServer::handle_config_update(const httplib::Request& req, httplib::R
             {"config_path", config_.config_path.empty() ? get_default_config_path() : config_.config_path}
         };
         send_json(res, response.dump());
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what(), "invalid_request_error", 400);
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body", "invalid_request_error", 400);
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
 void SnapLLMServer::handle_load_model(const httplib::Request& req, httplib::Response& res) {
     try {
         json body = json::parse(req.body);
-
-        // Support both "name"/"path" and "model_id"/"file_path" formats
-        std::string name = body.value("name", body.value("model_id", ""));
-        std::string path = body.value("path", body.value("file_path", ""));
-        std::string model_type_str = body.value("model_type", "auto");  // auto, llm, diffusion, vision, video
-
-        // Multi-file model paths (for SD3, FLUX, Wan2)
-        std::string vae_path = body.value("vae_path", "");
-        std::string t5xxl_path = body.value("t5xxl_path", "");
-        std::string clip_l_path = body.value("clip_l_path", "");
-        std::string clip_g_path = body.value("clip_g_path", "");
-        std::string clip_vision_path = body.value("clip_vision_path", "");
-        std::string high_noise_model_path = body.value("high_noise_model_path", "");
-
-        // Vision model paths (for Gemma, Qwen, etc.)
-        std::string mmproj_path = body.value("mmproj_path", body.value("vision_projector", ""));
-
-        if (name.empty()) {
-            send_error(res, "Missing 'name' or 'model_id' in request body");
+        if (!body.is_object()) {
+            send_error(res, "Request body must be a JSON object");
             return;
         }
-        if (path.empty()) {
-            send_error(res, "Missing 'path' or 'file_path' in request body");
+
+        // Support both "name"/"path" and "model_id"/"file_path" formats
+        std::string validation_error;
+        std::string name;
+        std::string path;
+        std::string model_type_str;
+        if (!read_bounded_string_alias(
+                body, "name", "model_id", "", limits::kMaximumStringBytes,
+                false, name, validation_error) ||
+            !read_bounded_string_alias(
+                body, "path", "file_path", "", limits::kMaximumStringBytes,
+                false, path, validation_error) ||
+            !read_bounded_string(
+                body, "model_type", "auto", limits::kMaximumStringBytes,
+                false, model_type_str, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        if (!limits::is_valid_identifier_component(name)) {
+            send_error(res, "'name' must be a safe model identifier");
+            return;
+        }
+
+        // Multi-file model paths (for SD3, FLUX, Wan2)
+        std::string vae_path;
+        std::string t5xxl_path;
+        std::string clip_l_path;
+        std::string clip_g_path;
+        std::string clip_vision_path;
+        std::string high_noise_model_path;
+
+        // Vision model paths (for Gemma, Qwen, etc.)
+        std::string mmproj_path;
+        if (!read_bounded_string(
+                body, "vae_path", "", limits::kMaximumStringBytes,
+                true, vae_path, validation_error) ||
+            !read_bounded_string(
+                body, "t5xxl_path", "", limits::kMaximumStringBytes,
+                true, t5xxl_path, validation_error) ||
+            !read_bounded_string(
+                body, "clip_l_path", "", limits::kMaximumStringBytes,
+                true, clip_l_path, validation_error) ||
+            !read_bounded_string(
+                body, "clip_g_path", "", limits::kMaximumStringBytes,
+                true, clip_g_path, validation_error) ||
+            !read_bounded_string(
+                body, "clip_vision_path", "", limits::kMaximumStringBytes,
+                true, clip_vision_path, validation_error) ||
+            !read_bounded_string(
+                body, "high_noise_model_path", "", limits::kMaximumStringBytes,
+                true, high_noise_model_path, validation_error) ||
+            !read_bounded_string_alias(
+                body, "mmproj_path", "vision_projector", "",
+                limits::kMaximumStringBytes, true, mmproj_path,
+                validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+
+        const auto roots = request_path_roots(config_);
+        auto confine_path = [&](const char* label, std::string& value) {
+            if (value.empty()) {
+                return true;
+            }
+            auto canonical =
+                limits::canonical_path_within_roots(roots, fs::path(value));
+            if (!canonical) {
+                validation_error = std::string("'") + label +
+                                   "' must be within the configured model or workspace root";
+                return false;
+            }
+            value = canonical->string();
+            return true;
+        };
+        if (!confine_path("path", path) ||
+            !confine_path("vae_path", vae_path) ||
+            !confine_path("t5xxl_path", t5xxl_path) ||
+            !confine_path("clip_l_path", clip_l_path) ||
+            !confine_path("clip_g_path", clip_g_path) ||
+            !confine_path("clip_vision_path", clip_vision_path) ||
+            !confine_path("high_noise_model_path", high_noise_model_path) ||
+            !confine_path("mmproj_path", mmproj_path)) {
+            send_error(res, validation_error, "invalid_path", 400);
+            return;
+        }
+        bool cache_only = false;
+        if (body.contains("cache_only")) {
+            if (!body["cache_only"].is_boolean()) {
+                send_error(res, "'cache_only' must be a boolean");
+                return;
+            }
+            cache_only = body["cache_only"].get<bool>();
+        }
+        if (cache_only) {
+            send_error(
+                res,
+                "Cache-only model loading is not implemented",
+                "not_supported",
+                501);
+            return;
+        }
+        std::string strategy;
+        if (!read_bounded_string(
+                body, "strategy", "auto", 16, false, strategy,
+                validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        int requested_gpu_layers = -1;
+        if (strategy == "cpu") {
+            requested_gpu_layers = 0;
+        } else if (strategy == "gpu") {
+            requested_gpu_layers = 999;
+        } else if (strategy != "auto") {
+            send_error(res, "'strategy' must be auto, cpu, or gpu");
+            return;
+        }
+        if (!read_bounded_integer(
+                body, "n_gpu_layers", requested_gpu_layers, -1, 999,
+                requested_gpu_layers, validation_error)) {
+            send_error(res, validation_error);
             return;
         }
         if (!fs::exists(path)) {
@@ -2168,12 +2788,19 @@ void SnapLLMServer::handle_load_model(const httplib::Request& req, httplib::Resp
         ModelType detected_type = ModelType::TEXT_LLM;
         if (model_type_str == "auto") {
             detected_type = detect_model_type(path);
+        } else if (model_type_str == "llm" || model_type_str == "text") {
+            detected_type = ModelType::TEXT_LLM;
         } else if (model_type_str == "diffusion" || model_type_str == "sd") {
             detected_type = ModelType::IMAGE_DIFFUSION;
         } else if (model_type_str == "vision" || model_type_str == "vl") {
             detected_type = ModelType::MULTIMODAL_VL;
         } else if (model_type_str == "video") {
             detected_type = ModelType::VIDEO_DIFFUSION;
+        } else {
+            send_error(
+                res,
+                "'model_type' must be auto, llm, text, diffusion, sd, vision, vl, or video");
+            return;
         }
 
         // Check if this is a multi-file diffusion model (SD3, FLUX, Wan2)
@@ -2284,9 +2911,24 @@ void SnapLLMServer::handle_load_model(const httplib::Request& req, httplib::Resp
                 MultimodalConfig mm_config;
                 mm_config.model_path = path;
                 mm_config.mmproj_path = mmproj_path;
-                mm_config.n_gpu_layers = body.value("n_gpu_layers", -1);  // -1 = all layers
-                mm_config.ctx_size = body.value("ctx_size", 4096);
-                mm_config.n_threads = body.value("n_threads", 4);
+                int multimodal_gpu_layers = 0;
+                int multimodal_context_size = 0;
+                int multimodal_threads = 0;
+                if (!read_bounded_integer(
+                        body, "n_gpu_layers", -1, -1, 999,
+                        multimodal_gpu_layers, validation_error) ||
+                    !read_bounded_integer(
+                        body, "ctx_size", 4096, 128, 131072,
+                        multimodal_context_size, validation_error) ||
+                    !read_bounded_integer(
+                        body, "n_threads", 4, 1, 256,
+                        multimodal_threads, validation_error)) {
+                    send_error(res, validation_error);
+                    return;
+                }
+                mm_config.n_gpu_layers = multimodal_gpu_layers;
+                mm_config.ctx_size = multimodal_context_size;
+                mm_config.n_threads = multimodal_threads;
                 mm_config.use_gpu = body.value("use_gpu", true);
 
                 success = multimodal_bridge->load_model(mm_config);
@@ -2302,7 +2944,9 @@ void SnapLLMServer::handle_load_model(const httplib::Request& req, httplib::Resp
             {
                 std::cout << "[Server] Routing to ModelManager (llama.cpp)..." << std::endl;
                 // Regular LLM models go through ModelManager
-                success = manager_->load_model(name, path);
+                success = manager_->load_model(
+                    name, path, false, DomainType::General,
+                    GPUConfig::with_layers(requested_gpu_layers));
             }
         }
 
@@ -2310,11 +2954,20 @@ void SnapLLMServer::handle_load_model(const httplib::Request& req, httplib::Resp
         double load_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
         if (success) {
-            // Automatically switch to the newly loaded model
-            manager_->switch_model(name);
-            std::cout << "[Server] Auto-switched to model: " << name << std::endl;
+            bool active = false;
+            if (detected_type == ModelType::TEXT_LLM) {
+                active = manager_->switch_model(name);
+                if (!active) {
+                    send_error(
+                        res,
+                        "Model loaded but could not be made ready: " + name,
+                        "activation_failed",
+                        500);
+                    return;
+                }
+                std::cout << "[Server] Auto-switched to model: " << name << std::endl;
+            }
 
-            bool cache_only = body.value("cache_only", false);
             json response = {
                 {"status", "success"},
                 {"message", "Model loaded: " + name},
@@ -2322,7 +2975,11 @@ void SnapLLMServer::handle_load_model(const httplib::Request& req, httplib::Resp
                 {"model_type", model_type_to_string(detected_type)},
                 {"load_time_ms", load_time_ms},
                 {"cache_only", cache_only},
-                {"active", true}
+                {"strategy", requested_gpu_layers == 0
+                    ? "cpu"
+                    : (requested_gpu_layers == 999 ? "gpu" : "auto")},
+                {"n_gpu_layers", requested_gpu_layers},
+                {"active", active}
             };
             send_json(res, response.dump(), 201);
             std::cout << "[Server] Model '" << name << "' loaded in " << load_time_ms << "ms" << std::endl;
@@ -2345,10 +3002,10 @@ void SnapLLMServer::handle_load_model(const httplib::Request& req, httplib::Resp
             }
         }
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -2356,10 +3013,16 @@ void SnapLLMServer::handle_switch_model(const httplib::Request& req, httplib::Re
     try {
         json body = json::parse(req.body);
         // Accept both 'model_id' (API standard) and 'name' (legacy) for compatibility
-        std::string name = body.value("model_id", body.value("name", ""));
-
-        if (name.empty()) {
-            send_error(res, "Missing 'model_id' or 'name' in request body");
+        std::string name;
+        std::string validation_error;
+        if (!read_bounded_string_alias(
+                body, "model_id", "name", "", 255,
+                false, name, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        if (!limits::is_valid_identifier_component(name)) {
+            send_error(res, "'model_id' must be a safe model identifier");
             return;
         }
 
@@ -2386,10 +3049,10 @@ void SnapLLMServer::handle_switch_model(const httplib::Request& req, httplib::Re
             send_error(res, "Model not found: " + name, "not_found", 404);
         }
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -2397,10 +3060,16 @@ void SnapLLMServer::handle_unload_model(const httplib::Request& req, httplib::Re
     try {
         json body = json::parse(req.body);
         // Accept both 'model_id' (API standard) and 'name' (legacy) for compatibility
-        std::string name = body.value("model_id", body.value("name", ""));
-
-        if (name.empty()) {
-            send_error(res, "Missing 'name' in request body");
+        std::string name;
+        std::string validation_error;
+        if (!read_bounded_string_alias(
+                body, "model_id", "name", "", 255,
+                false, name, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        if (!limits::is_valid_identifier_component(name)) {
+            send_error(res, "'model_id' must be a safe model identifier");
             return;
         }
 
@@ -2437,10 +3106,10 @@ void SnapLLMServer::handle_unload_model(const httplib::Request& req, httplib::Re
             send_error(res, "Model not found: " + name, "not_found", 404);
         }
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -2451,12 +3120,29 @@ void SnapLLMServer::handle_unload_model(const httplib::Request& req, httplib::Re
 void SnapLLMServer::handle_scan_folder(const httplib::Request& req, httplib::Response& res) {
     try {
         json body = json::parse(req.body);
-        std::string path = body.value("path", "");
-
-        if (path.empty()) {
-            send_error(res, "Missing 'path' in request body");
+        if (!body.is_object()) {
+            send_error(res, "Request body must be a JSON object");
             return;
         }
+        std::string path;
+        std::string validation_error;
+        if (!read_bounded_string(
+                body, "path", "", limits::kMaximumStringBytes,
+                false, path, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        auto canonical = limits::canonical_path_within_roots(
+            request_path_roots(config_), fs::path(path));
+        if (!canonical) {
+            send_error(
+                res,
+                "'path' must be within the configured model or workspace root",
+                "invalid_path",
+                400);
+            return;
+        }
+        path = canonical->string();
 
         std::cout << "[Server] Scanning folder: " << path << std::endl;
 
@@ -2472,8 +3158,20 @@ void SnapLLMServer::handle_scan_folder(const httplib::Request& req, httplib::Res
         }
 
         // Scan for .gguf files
+        constexpr size_t kMaximumScannedModels = 10000;
+        constexpr auto kMaximumScanDuration = std::chrono::seconds(5);
+        const auto scan_started = std::chrono::steady_clock::now();
         std::vector<json> models;
         for (const auto& entry : fs::directory_iterator(path)) {
+            if (models.size() >= kMaximumScannedModels ||
+                std::chrono::steady_clock::now() - scan_started > kMaximumScanDuration) {
+                send_error(
+                    res,
+                    "Folder scan exceeded its result or time limit",
+                    "scan_limit_exceeded",
+                    413);
+                return;
+            }
             if (entry.is_regular_file()) {
                 std::string filename = entry.path().filename().string();
                 std::string ext = entry.path().extension().string();
@@ -2531,12 +3229,12 @@ void SnapLLMServer::handle_scan_folder(const httplib::Request& req, httplib::Res
         send_json(res, response.dump());
         std::cout << "[Server] Found " << models.size() << " GGUF models in " << path << std::endl;
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const fs::filesystem_error& e) {
-        send_error(res, std::string("Filesystem error: ") + e.what(), "filesystem_error", 500);
+        send_internal_error(res, "folder scan", e);
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -2679,15 +3377,11 @@ void SnapLLMServer::handle_cache_stats(const httplib::Request&, httplib::Respons
 }
 
 void SnapLLMServer::handle_cache_clear(const httplib::Request&, httplib::Response& res) {
-    manager_->clear_prompt_cache();
-
-    json response = {
-        {"status", "success"},
-        {"message", "Cache cleared successfully"}
-    };
-
-    send_json(res, response.dump());
-    std::cout << "[Server] Cache cleared" << std::endl;
+    send_error(
+        res,
+        "Prompt-cache clearing is not implemented by this runtime",
+        "not_supported",
+        501);
 }
 
 void SnapLLMServer::handle_server_metrics(const httplib::Request&, httplib::Response& res) {
@@ -2715,18 +3409,6 @@ void SnapLLMServer::handle_server_metrics(const httplib::Request&, httplib::Resp
                 if (it->second.total_latency_ms > 0.0) {
                     tps = (tokens / (it->second.total_latency_ms / 1000.0));
                 }
-            }
-        }
-
-        // Fallback to workspace stats if no runtime metrics recorded
-        if (requests == 0 && tokens == 0) {
-            auto workspace = manager_->get_workspace(model_id);
-            if (workspace) {
-                const auto& stats = workspace->get_stats();
-                requests = stats.total_reads.load();
-                tokens = stats.bytes_read.load() / 4; // Rough estimate: 4 bytes per token
-                tps = tokens > 0 && uptime > 0 ? static_cast<double>(tokens) / uptime : 0.0;
-                avg_latency = requests > 0 ? 50.0 : 0.0; // Placeholder
             }
         }
 
@@ -2769,19 +3451,46 @@ void SnapLLMServer::handle_generate(const httplib::Request& req, httplib::Respon
 
     try {
         json body = json::parse(req.body);
-
-        std::string prompt = body.value("prompt", "");
-        if (prompt.empty()) {
-            send_error(res, "Missing 'prompt' in request body");
+        if (!body.is_object()) {
+            send_error(res, "Request body must be a JSON object");
             return;
         }
 
-        std::string model = body.value("model", manager_->get_current_model());
-        int max_tokens = body.value("max_tokens", 512);
-        float temperature = body.value("temperature", 0.8f);
-        float top_p = body.value("top_p", 0.95f);
-        int top_k = body.value("top_k", 40);
-        float repeat_penalty = body.value("repeat_penalty", 1.1f);
+        std::string validation_error;
+        std::string prompt;
+        if (!read_bounded_string(
+                body, "prompt", "", limits::kMaximumPromptBytes,
+                false, prompt, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+
+        std::string model;
+        if (!read_bounded_string(
+                body, "model", manager_->get_current_model(),
+                limits::kMaximumStringBytes, true, model, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        int max_tokens = 0;
+        if (!read_bounded_integer(
+                body, "max_tokens", 512,
+                limits::kMinimumMaxTokens, limits::kMaximumMaxTokens,
+                max_tokens, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        float temperature = 0.0f;
+        float top_p = 0.0f;
+        float repeat_penalty = 0.0f;
+        int top_k = 0;
+        if (!read_bounded_float(body, "temperature", 0.8, 0.0, 2.0, temperature, validation_error) ||
+            !read_bounded_float(body, "top_p", 0.95, 0.0, 1.0, top_p, validation_error) ||
+            !read_bounded_integer(body, "top_k", 40, 0, 1000, top_k, validation_error) ||
+            !read_bounded_float(body, "repeat_penalty", 1.1, 0.0, 10.0, repeat_penalty, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
 
         // Switch model if needed - protected by mutex
         if (!model.empty() && model != manager_->get_current_model()) {
@@ -2827,10 +3536,10 @@ void SnapLLMServer::handle_generate(const httplib::Request& req, httplib::Respon
 
         send_json(res, response.dump());
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -2848,24 +3557,64 @@ void SnapLLMServer::handle_generate_batch(const httplib::Request& req, httplib::
 
     try {
         json body = json::parse(req.body);
+        if (!body.is_object()) {
+            send_error(res, "Request body must be a JSON object");
+            return;
+        }
 
         // Parse global defaults
-        std::string model = body.value("model", manager_->get_current_model());
-        int default_max_tokens = body.value("max_tokens", 512);
-        float default_temp = body.value("temperature", 0.8f);
-        float default_top_p = body.value("top_p", 0.95f);
-        int default_top_k = body.value("top_k", 40);
-        float default_repeat = body.value("repeat_penalty", 1.1f);
+        std::string validation_error;
+        std::string model;
+        if (!read_bounded_string(
+                body, "model", manager_->get_current_model(),
+                limits::kMaximumStringBytes, true, model, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        int default_max_tokens = 0;
+        if (!read_bounded_integer(
+                body, "max_tokens", 512,
+                limits::kMinimumMaxTokens, limits::kMaximumMaxTokens,
+                default_max_tokens, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        float default_temp = 0.0f;
+        float default_top_p = 0.0f;
+        float default_repeat = 0.0f;
+        int default_top_k = 0;
+        if (!read_bounded_float(body, "temperature", 0.8, 0.0, 2.0, default_temp, validation_error) ||
+            !read_bounded_float(body, "top_p", 0.95, 0.0, 1.0, default_top_p, validation_error) ||
+            !read_bounded_integer(body, "top_k", 40, 0, 1000, default_top_k, validation_error) ||
+            !read_bounded_float(body, "repeat_penalty", 1.1, 0.0, 10.0, default_repeat, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
 
         // Build BatchPromptItem list from either "items" (new) or "prompts" (legacy) format
         std::vector<snapllm::BatchPromptItem> items;
 
         if (body.contains("items") && body["items"].is_array()) {
+            if (!limits::is_valid_batch_count(body["items"].size())) {
+                send_error(res, "'items' exceeds the batch limit");
+                return;
+            }
             // New rich format with per-prompt messages and parameters
             for (const auto& item_json : body["items"]) {
+                if (!item_json.is_object()) {
+                    send_error(res, "Each batch item must be an object");
+                    return;
+                }
                 snapllm::BatchPromptItem item;
 
                 if (item_json.contains("messages") && item_json["messages"].is_array()) {
+                    std::size_t total_message_bytes = 0;
+                    if (!validate_text_messages(
+                            item_json["messages"], validation_error,
+                            total_message_bytes)) {
+                        send_error(res, validation_error);
+                        return;
+                    }
                     for (const auto& msg : item_json["messages"]) {
                         item.messages.push_back({
                             msg.value("role", "user"),
@@ -2873,26 +3622,69 @@ void SnapLLMServer::handle_generate_batch(const httplib::Request& req, httplib::
                         });
                     }
                 } else if (item_json.contains("prompt")) {
-                    item.raw_prompt = item_json.value("prompt", "");
+                    if (!read_bounded_string(
+                            item_json, "prompt", "",
+                            limits::kMaximumPromptBytes, false,
+                            item.raw_prompt, validation_error)) {
+                        send_error(res, validation_error);
+                        return;
+                    }
+                } else {
+                    send_error(res, "Each batch item requires 'messages' or 'prompt'");
+                    return;
                 }
 
-                item.max_tokens = item_json.value("max_tokens", default_max_tokens);
-                if (item_json.contains("temperature"))
-                    item.temperature = item_json.value("temperature", 0.8f);
-                if (item_json.contains("top_p"))
-                    item.top_p = item_json.value("top_p", 0.95f);
-                if (item_json.contains("top_k"))
-                    item.top_k = item_json.value("top_k", 40);
-                if (item_json.contains("repeat_penalty"))
-                    item.repeat_penalty = item_json.value("repeat_penalty", 1.1f);
-                if (item_json.contains("system_prompt"))
-                    item.system_prompt = item_json.value("system_prompt", "");
+                int item_max_tokens = 0;
+                if (!read_bounded_integer(
+                        item_json, "max_tokens", default_max_tokens,
+                        limits::kMinimumMaxTokens, limits::kMaximumMaxTokens,
+                        item_max_tokens, validation_error)) {
+                    send_error(res, validation_error);
+                    return;
+                }
+                item.max_tokens = item_max_tokens;
+                float item_temperature = 0.0f;
+                float item_top_p = 0.0f;
+                float item_repeat_penalty = 0.0f;
+                int item_top_k = 0;
+                if (!read_bounded_float(item_json, "temperature", default_temp, 0.0, 2.0, item_temperature, validation_error) ||
+                    !read_bounded_float(item_json, "top_p", default_top_p, 0.0, 1.0, item_top_p, validation_error) ||
+                    !read_bounded_integer(item_json, "top_k", default_top_k, 0, 1000, item_top_k, validation_error) ||
+                    !read_bounded_float(item_json, "repeat_penalty", default_repeat, 0.0, 10.0, item_repeat_penalty, validation_error)) {
+                    send_error(res, validation_error);
+                    return;
+                }
+                item.temperature = item_temperature;
+                item.top_p = item_top_p;
+                item.top_k = item_top_k;
+                item.repeat_penalty = item_repeat_penalty;
+                if (item_json.contains("system_prompt")) {
+                    std::string system_prompt;
+                    if (!read_bounded_string(
+                            item_json, "system_prompt", "",
+                            limits::kMaximumPromptBytes, true,
+                            system_prompt, validation_error)) {
+                        send_error(res, validation_error);
+                        return;
+                    }
+                    item.system_prompt = std::move(system_prompt);
+                }
 
                 items.push_back(std::move(item));
             }
         } else if (body.contains("prompts") && body["prompts"].is_array()) {
+            if (!limits::is_valid_batch_count(body["prompts"].size())) {
+                send_error(res, "'prompts' exceeds the batch limit");
+                return;
+            }
             // Legacy format: simple string array
             for (const auto& p : body["prompts"]) {
+                if (!p.is_string() ||
+                    !limits::is_valid_prompt_size(
+                        p.get_ref<const std::string&>().size())) {
+                    send_error(res, "Each prompt must be a non-empty bounded string");
+                    return;
+                }
                 snapllm::BatchPromptItem item;
                 item.raw_prompt = p.get<std::string>();
                 item.max_tokens = default_max_tokens;
@@ -2984,10 +3776,10 @@ void SnapLLMServer::handle_generate_batch(const httplib::Request& req, httplib::
 
         send_json(res, response.dump());
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -3010,19 +3802,55 @@ void SnapLLMServer::handle_diffusion_generate(const httplib::Request& req, httpl
 
     try {
         json body = json::parse(req.body);
-
-        std::string prompt = body.value("prompt", "");
-        if (prompt.empty()) {
-            send_error(res, "Missing 'prompt' in request body");
+        if (!body.is_object()) {
+            send_error(res, "Request body must be a JSON object");
             return;
         }
 
-        std::string negative_prompt = body.value("negative_prompt", "");
-        std::string model = body.value("model", "");
-        int width = body.value("width", 512);
-        int height = body.value("height", 512);
-        int steps = body.value("steps", 20);
-        float cfg_scale = body.value("cfg_scale", 7.0f);
+        std::string validation_error;
+        std::string prompt;
+        std::string negative_prompt;
+        std::string model;
+        if (!read_bounded_string(
+                body, "prompt", "", limits::kMaximumPromptBytes,
+                false, prompt, validation_error) ||
+            !read_bounded_string(
+                body, "negative_prompt", "", limits::kMaximumPromptBytes,
+                true, negative_prompt, validation_error) ||
+            !read_bounded_string(
+                body, "model", "", limits::kMaximumStringBytes,
+                true, model, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+
+        int width = 0;
+        int height = 0;
+        int steps = 0;
+        if (!read_bounded_integer(
+                body, "width", 512,
+                limits::kMinimumImageDimension, limits::kMaximumImageDimension,
+                width, validation_error) ||
+            !read_bounded_integer(
+                body, "height", 512,
+                limits::kMinimumImageDimension, limits::kMaximumImageDimension,
+                height, validation_error) ||
+            !read_bounded_integer(
+                body, "steps", 20,
+                limits::kMinimumDiffusionSteps, limits::kMaximumDiffusionSteps,
+                steps, validation_error) ||
+            !limits::is_valid_diffusion_request(width, height, steps)) {
+            if (validation_error.empty()) {
+                validation_error = "Image dimensions exceed the pixel limit";
+            }
+            send_error(res, validation_error);
+            return;
+        }
+        float cfg_scale = 0.0f;
+        if (!read_bounded_float(body, "cfg_scale", 7.0, 0.0, 30.0, cfg_scale, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
         int64_t seed = body.value("seed", -1);
 
         // Use shared diffusion bridge
@@ -3109,10 +3937,10 @@ void SnapLLMServer::handle_diffusion_generate(const httplib::Request& req, httpl
         record_model_metrics(model, 0, generation_time * 1000.0);
         send_json(res, response.dump());
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 #else
     send_error(res, "Diffusion support not enabled. Build with SNAPLLM_HAS_DIFFUSION=1", "not_supported", 501);
@@ -3143,23 +3971,47 @@ void SnapLLMServer::handle_vision_generate(const httplib::Request& req, httplib:
 
     try {
         json body = json::parse(req.body);
+        if (!body.is_object()) {
+            send_error(res, "Request body must be a JSON object");
+            return;
+        }
 
-        std::string prompt = body.value("prompt", "");
-        if (prompt.empty()) {
-            send_error(res, "Missing 'prompt' in request body");
+        std::string validation_error;
+        std::string prompt;
+        if (!read_bounded_string(
+                body, "prompt", "", limits::kMaximumPromptBytes,
+                false, prompt, validation_error)) {
+            send_error(res, validation_error);
             return;
         }
 
         // Accept both 'image' (single string) and 'images' (array) from frontend
         std::vector<std::string> image_data_list;
+        if (body.contains("images") && !body["images"].is_array()) {
+            send_error(res, "'images' must be an array");
+            return;
+        }
         if (body.contains("images") && body["images"].is_array()) {
-            for (const auto& img : body["images"]) {
-                if (img.is_string()) {
-                    image_data_list.push_back(img.get<std::string>());
-                }
+            if (!limits::is_valid_vision_image_count(body["images"].size())) {
+                send_error(res, "'images' exceeds the image count limit");
+                return;
             }
-        } else if (body.contains("image") && body["image"].is_string()) {
+            for (const auto& img : body["images"]) {
+                if (!img.is_string() ||
+                    !limits::is_valid_base64_image_size(
+                        img.get_ref<const std::string&>().size())) {
+                    send_error(res, "Each image must be a bounded base64 string");
+                    return;
+                }
+                image_data_list.push_back(img.get<std::string>());
+            }
+        } else if (body.contains("image") && body["image"].is_string() &&
+                   limits::is_valid_base64_image_size(
+                       body["image"].get_ref<const std::string&>().size())) {
             image_data_list.push_back(body["image"].get<std::string>());
+        } else if (body.contains("image")) {
+            send_error(res, "'image' must be a bounded base64 string");
+            return;
         }
 
         if (image_data_list.empty()) {
@@ -3167,13 +4019,29 @@ void SnapLLMServer::handle_vision_generate(const httplib::Request& req, httplib:
             return;
         }
 
-        std::string model = body.value("model", "");
-        int max_tokens = body.value("max_tokens", 512);
+        std::string model;
+        if (!read_bounded_string(
+                body, "model", "", limits::kMaximumStringBytes,
+                true, model, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        int max_tokens = 0;
+        if (!read_bounded_integer(
+                body, "max_tokens", 512,
+                limits::kMinimumMaxTokens, limits::kMaximumMaxTokens,
+                max_tokens, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
         MultimodalSamplingParams sampling;
-        sampling.temperature = body.value("temperature", sampling.temperature);
-        sampling.top_p = body.value("top_p", sampling.top_p);
-        sampling.top_k = body.value("top_k", sampling.top_k);
-        sampling.repeat_penalty = body.value("repeat_penalty", sampling.repeat_penalty);
+        if (!read_bounded_float(body, "temperature", sampling.temperature, 0.0, 2.0, sampling.temperature, validation_error) ||
+            !read_bounded_float(body, "top_p", sampling.top_p, 0.0, 1.0, sampling.top_p, validation_error) ||
+            !read_bounded_integer(body, "top_k", sampling.top_k, 0, 1000, sampling.top_k, validation_error) ||
+            !read_bounded_float(body, "repeat_penalty", sampling.repeat_penalty, 0.0, 10.0, sampling.repeat_penalty, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
 
         // Use the shared multimodal bridge
         auto* multimodal_bridge = get_multimodal_bridge();
@@ -3183,53 +4051,28 @@ void SnapLLMServer::handle_vision_generate(const httplib::Request& req, httplib:
             return;
         }
 
-        // Helper lambda to decode base64
-        auto base64_decode = [](const std::string& encoded) -> std::vector<uint8_t> {
-            static const std::string base64_chars =
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-            std::vector<uint8_t> result;
-            int i = 0, j = 0, in_ = 0;
-            int in_len = encoded.size();
-            uint8_t char_array_4[4], char_array_3[3];
-
-            while (in_len-- && encoded[in_] != '=' &&
-                   (isalnum(encoded[in_]) || encoded[in_] == '+' || encoded[in_] == '/')) {
-                char_array_4[i++] = encoded[in_++];
-                if (i == 4) {
-                    for (i = 0; i < 4; i++) {
-                        char_array_4[i] = base64_chars.find(char_array_4[i]);
-                    }
-                    char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
-                    char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
-                    char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
-                    for (i = 0; i < 3; i++) result.push_back(char_array_3[i]);
-                    i = 0;
-                }
-            }
-            if (i) {
-                for (j = i; j < 4; j++) char_array_4[j] = 0;
-                for (j = 0; j < 4; j++) char_array_4[j] = base64_chars.find(char_array_4[j]);
-                char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
-                char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
-                char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
-                for (j = 0; j < i - 1; j++) result.push_back(char_array_3[j]);
-            }
-            return result;
-        };
-
         // Decode all images and prepare inputs
         std::vector<ImageInput> images;
         for (const auto& img_b64 : image_data_list) {
-            // Decode base64 to raw bytes
-            std::vector<uint8_t> img_bytes = base64_decode(img_b64);
-            if (img_bytes.empty()) {
+            auto decoded = limits::decode_base64_strict(img_b64);
+            if (!decoded || decoded->empty()) {
                 send_error(res, "Failed to decode base64 image data");
+                return;
+            }
+            std::vector<uint8_t> img_bytes = std::move(*decoded);
+
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+            if (!stbi_info_from_memory(
+                    img_bytes.data(), static_cast<int>(img_bytes.size()),
+                    &width, &height, &channels) ||
+                !limits::is_valid_decoded_image_dimensions(width, height)) {
+                send_error(res, "Decoded image dimensions exceed the request limits");
                 return;
             }
 
             // Use stb_image to decode PNG/JPG to RGB
-            int width, height, channels;
             unsigned char* rgb_data = stbi_load_from_memory(
                 img_bytes.data(), static_cast<int>(img_bytes.size()),
                 &width, &height, &channels, 3  // Force RGB
@@ -3285,10 +4128,10 @@ void SnapLLMServer::handle_vision_generate(const httplib::Request& req, httplib:
                              generation_time * 1000.0);
         send_json(res, response.dump());
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 #else
     send_error(res, "Multimodal/vision support not enabled. Build with SNAPLLM_HAS_MULTIMODAL=1", "not_supported", 501);
@@ -3316,6 +4159,15 @@ void SnapLLMServer::send_error(httplib::Response& res, const std::string& messag
     };
     res.status = status;
     res.set_content(error.dump(), MIMETYPE_JSON);
+}
+
+void SnapLLMServer::send_internal_error(
+    httplib::Response& res,
+    const char* operation,
+    const std::exception& error) {
+    std::cerr << "[SnapLLM Server] " << operation << " failed: "
+              << error.what() << std::endl;
+    send_error(res, "Internal server error", "server_error", 500);
 }
 
 std::string SnapLLMServer::generate_completion_id() {
@@ -3379,17 +4231,52 @@ void SnapLLMServer::handle_context_ingest(const httplib::Request& req, httplib::
     try {
         json body = json::parse(req.body);
 
-        // Extract required fields
-        std::string content = body.value("content", "");
-        std::string model_id = body.value("model_id", body.value("model", manager_->get_current_model()));
-
-        if (content.empty()) {
-            send_error(res, "Missing 'content' in request body");
+        if (!body.is_object()) {
+            send_error(res, "Request body must be a JSON object");
             return;
         }
 
-        if (model_id.empty()) {
-            send_error(res, "Missing 'model_id' and no model loaded");
+        std::string validation_error;
+        std::string content;
+        std::string model_id;
+        std::string name;
+        std::string source;
+        std::string priority;
+        std::string dtype;
+        if (!read_bounded_string(
+                body, "content", "", limits::kMaximumPromptBytes,
+                false, content, validation_error) ||
+            !read_bounded_string_alias(
+                body, "model_id", "model", manager_->get_current_model(),
+                255, false, model_id, validation_error) ||
+            !read_bounded_string(
+                body, "name", "", 255, true, name, validation_error) ||
+            !read_bounded_string(
+                body, "source", "", limits::kMaximumStringBytes,
+                true, source, validation_error) ||
+            !read_bounded_string(
+                body, "priority", "normal", 16,
+                false, priority, validation_error) ||
+            !read_bounded_string(
+                body, "dtype", "fp16", 8,
+                false, dtype, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+        if (priority != "low" && priority != "normal" && priority != "high") {
+            send_error(res, "'priority' must be low, normal, or high");
+            return;
+        }
+        if (dtype != "fp16" && dtype != "fp32" &&
+            dtype != "bf16" && dtype != "int8") {
+            send_error(res, "'dtype' must be fp16, fp32, bf16, or int8");
+            return;
+        }
+        int ttl_seconds = 0;
+        if (!read_bounded_integer(
+                body, "ttl_seconds", 86400, 0, 31536000,
+                ttl_seconds, validation_error)) {
+            send_error(res, validation_error);
             return;
         }
 
@@ -3397,13 +4284,12 @@ void SnapLLMServer::handle_context_ingest(const httplib::Request& req, httplib::
         ContextSpec spec;
         spec.content = content;
         spec.model_id = model_id;
-        spec.name = body.value("name", "");
-        spec.source = body.value("source", "");
-        spec.ttl_seconds = body.value("ttl_seconds", 86400);
-        spec.priority = body.value("priority", "normal");
+        spec.name = name;
+        spec.source = source;
+        spec.ttl_seconds = static_cast<uint32_t>(ttl_seconds);
+        spec.priority = priority;
 
         // Configure KV cache
-        std::string dtype = body.value("dtype", "fp16");
         if (dtype == "fp32") spec.config.dtype = KVDataType::FP32;
         else if (dtype == "bf16") spec.config.dtype = KVDataType::BF16;
         else if (dtype == "int8") spec.config.dtype = KVDataType::INT8;
@@ -3438,16 +4324,16 @@ void SnapLLMServer::handle_context_ingest(const httplib::Request& req, httplib::
             {"storage_size_mb", metadata ? (metadata->storage_size_bytes / (1024.0 * 1024.0)) : 0.0},
             {"tier", "hot"},
             {"ingest_time_ms", ingest_time_ms},
-            {"message", "Context ingested successfully. KV cache pre-computed for O(1) queries."}
+            {"message", "Context ingested successfully. KV cache pre-computed for reuse."}
         };
 
         send_json(res, response.dump(), 201);
         std::cout << "[Server] Context '" << handle.id << "' ingested in " << ingest_time_ms << "ms" << std::endl;
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -3494,7 +4380,7 @@ void SnapLLMServer::handle_context_list(const httplib::Request& req, httplib::Re
         send_json(res, response.dump());
 
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -3541,7 +4427,7 @@ void SnapLLMServer::handle_context_get(const httplib::Request& req, httplib::Res
         send_json(res, response.dump());
 
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -3558,9 +4444,13 @@ void SnapLLMServer::handle_context_query(const httplib::Request& req, httplib::R
     try {
         json body = json::parse(req.body);
 
-        std::string query = body.value("query", body.value("prompt", ""));
-        if (query.empty()) {
-            send_error(res, "Missing 'query' or 'prompt' in request body");
+        std::string validation_error;
+        std::string query;
+        if (!read_bounded_string_alias(
+                body, "query", "prompt", "",
+                limits::kMaximumPromptBytes, false,
+                query, validation_error)) {
+            send_error(res, validation_error);
             return;
         }
 
@@ -3576,21 +4466,44 @@ void SnapLLMServer::handle_context_query(const httplib::Request& req, httplib::R
         }
 
         // Build query config
+        int max_tokens = 0;
+        if (!read_bounded_integer(
+                body, "max_tokens", 1024,
+                limits::kMinimumMaxTokens, limits::kMaximumMaxTokens,
+                max_tokens, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
+
         ContextQueryConfig config;
-        config.max_tokens = body.value("max_tokens", 1024);
-        config.temperature = body.value("temperature", 0.7f);
-        config.top_p = body.value("top_p", 0.95f);
-        config.top_k = body.value("top_k", 40);
-        config.repeat_penalty = body.value("repeat_penalty", 1.1f);
+        config.max_tokens = static_cast<uint32_t>(max_tokens);
+        if (!read_bounded_float(body, "temperature", 0.7, 0.0, 2.0, config.temperature, validation_error) ||
+            !read_bounded_float(body, "top_p", 0.95, 0.0, 1.0, config.top_p, validation_error) ||
+            !read_bounded_integer(body, "top_k", 40, 0, 1000, config.top_k, validation_error) ||
+            !read_bounded_float(body, "repeat_penalty", 1.1, 0.0, 10.0, config.repeat_penalty, validation_error)) {
+            send_error(res, validation_error);
+            return;
+        }
         config.stream = body.value("stream", false);
 
-        std::cout << "[Server] Query with context '" << context_id << "': \""
-                  << query.substr(0, 50) << (query.size() > 50 ? "..." : "") << "\"" << std::endl;
+        std::cout << "[Server] Query with context '" << context_id
+                  << "' (" << query.size() << " bytes)" << std::endl;
 
         auto start_time = std::chrono::high_resolution_clock::now();
 
         // Execute query with cached KV
         ContextQueryResult result = context_manager_->query(handle, query, config);
+        if (!result.ok()) {
+            const int status =
+                result.status == ContextQueryResult::Status::ContextNotFound ? 404 :
+                result.status == ContextQueryResult::Status::Unsupported ? 501 : 503;
+            send_error(
+                res,
+                result.error_message.empty() ? "Context query failed" : result.error_message,
+                "context_query_error",
+                status);
+            return;
+        }
 
         auto end_time = std::chrono::high_resolution_clock::now();
         double total_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
@@ -3608,7 +4521,7 @@ void SnapLLMServer::handle_context_query(const httplib::Request& req, httplib::R
             }},
             {"latency_ms", result.latency_ms},
             {"total_time_ms", total_time_ms},
-            {"speedup", result.cache_hit ? "O(1) context lookup" : "standard O(n²)"}
+            {"speedup", result.cache_hit ? "indexed cache lookup" : "uncached"}
         };
 
         send_json(res, response.dump());
@@ -3616,10 +4529,10 @@ void SnapLLMServer::handle_context_query(const httplib::Request& req, httplib::R
         std::cout << "[Server] Query completed in " << total_time_ms << "ms"
                   << (result.cache_hit ? " (cache hit)" : "") << std::endl;
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -3651,7 +4564,7 @@ void SnapLLMServer::handle_context_delete(const httplib::Request& req, httplib::
         }
 
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -3688,10 +4601,10 @@ void SnapLLMServer::handle_context_promote(const httplib::Request& req, httplib:
             send_error(res, "Failed to promote context (invalid tier transition)", "promote_failed", 400);
         }
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -3728,10 +4641,10 @@ void SnapLLMServer::handle_context_demote(const httplib::Request& req, httplib::
             send_error(res, "Failed to demote context (invalid tier transition)", "demote_failed", 400);
         }
 
-    } catch (const json::exception& e) {
-        send_error(res, std::string("JSON parse error: ") + e.what());
+    } catch (const json::exception&) {
+        send_error(res, "Invalid JSON request body");
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 
@@ -3758,7 +4671,7 @@ void SnapLLMServer::handle_context_stats(const httplib::Request& req, httplib::R
             }},
             {"tiering_summary", {
                 {"hot_tier", {
-                    {"description", "GPU-ready KV caches for instant access"},
+                    {"description", "GPU-ready KV caches for reuse"},
                     {"contexts", stats.hot_contexts},
                     {"memory_mb", stats.hot_memory_bytes / (1024.0 * 1024.0)}
                 }},
@@ -3778,7 +4691,7 @@ void SnapLLMServer::handle_context_stats(const httplib::Request& req, httplib::R
         send_json(res, response.dump());
 
     } catch (const std::exception& e) {
-        send_error(res, std::string("Error: ") + e.what(), "server_error", 500);
+        send_internal_error(res, "request", e);
     }
 }
 

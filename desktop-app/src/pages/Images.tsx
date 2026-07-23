@@ -50,7 +50,12 @@ import {
   FileImage,
   AlertTriangle,
 } from 'lucide-react';
-import { generateImage, listDiffusionModels } from '../lib/api';
+import {
+  fetchProtectedAsset,
+  generateImage,
+  handleApiError,
+  listDiffusionModels,
+} from '../lib/api';
 import { useModelStore } from '../store';
 import { Button, IconButton, Badge, Card, Progress, Modal } from '../components/ui';
 
@@ -61,6 +66,7 @@ import { Button, IconButton, Badge, Card, Progress, Modal } from '../components/
 interface GeneratedImage {
   id: string;
   url: string;
+  sourceUrl: string;
   prompt: string;
   negativePrompt?: string;
   width: number;
@@ -174,7 +180,12 @@ export default function Images() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        return parsed.map((img: any) => ({ ...img, createdAt: new Date(img.createdAt) }));
+        return parsed.map((img: any) => ({
+          ...img,
+          sourceUrl: img.sourceUrl || img.url,
+          url: img.sourceUrl || img.url,
+          createdAt: new Date(img.createdAt),
+        }));
       } catch { return []; }
     }
     return [];
@@ -192,7 +203,8 @@ export default function Images() {
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
   const [selectedImages, setSelectedImages] = useState<Set<string>>(new Set());
   const [showAnalytics, setShowAnalytics] = useState(false);
-  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const ownedBlobUrlsRef = useRef<Set<string>>(new Set());
   const [showPromptLibrary, setShowPromptLibrary] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState(0);
@@ -216,8 +228,46 @@ export default function Images() {
 
   // Persist to localStorage
   useEffect(() => {
-    localStorage.setItem('snapllm_generated_images', JSON.stringify(generatedImages));
+    const persistentImages = generatedImages.map((image) => ({
+      ...image,
+      url: image.sourceUrl,
+    }));
+    localStorage.setItem('snapllm_generated_images', JSON.stringify(persistentImages));
   }, [generatedImages]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrateProtectedImages = async () => {
+      const hydrated = await Promise.all(generatedImages.map(async (image) => {
+        if (image.url.startsWith('blob:')) return image;
+        try {
+          const url = await fetchProtectedAsset(image.sourceUrl);
+          if (cancelled) {
+            URL.revokeObjectURL(url);
+            return image;
+          }
+          ownedBlobUrlsRef.current.add(url);
+          return { ...image, url };
+        } catch {
+          return image;
+        }
+      }));
+      if (!cancelled && hydrated.some((image, index) => image.url !== generatedImages[index]?.url)) {
+        setGeneratedImages(hydrated);
+      }
+    };
+    void hydrateProtectedImages();
+    return () => {
+      cancelled = true;
+    };
+    // Rehydrate the initial persisted gallery once; generated assets are
+    // converted by the mutation before being added.
+  }, []);
+
+  useEffect(() => () => {
+    ownedBlobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    ownedBlobUrlsRef.current.clear();
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('snapllm_saved_prompts', JSON.stringify(savedPrompts));
@@ -322,16 +372,25 @@ export default function Images() {
         sampler: settings.sampler,
         batch_size: settings.batchSize,
       });
+      const protectedImages = await Promise.all(
+        (response.images || []).map(async (sourceUrl) => {
+          const url = await fetchProtectedAsset(sourceUrl);
+          ownedBlobUrlsRef.current.add(url);
+          return { sourceUrl, url };
+        }),
+      );
       return {
         ...response,
+        protectedImages,
         generationTime: Date.now() - startTime,
       };
     },
     onSuccess: (data) => {
       const model = diffusionModels.find((m: any) => m.id === selectedModel);
-      const newImages: GeneratedImage[] = (data.images || []).map((img: string, i: number) => ({
+      const newImages: GeneratedImage[] = data.protectedImages.map((img, i: number) => ({
         id: crypto.randomUUID(),
-        url: img,
+        url: img.url,
+        sourceUrl: img.sourceUrl,
         prompt,
         negativePrompt: settings.negativePrompt,
         width: settings.width,
@@ -367,9 +426,9 @@ export default function Images() {
       }
       setIsGenerating(false);
       setGenerationProgress(0);
-      const errorMessage = error?.response?.data?.detail || error?.message || 'Image generation failed';
+      const errorMessage = handleApiError(error) || 'Image generation failed';
       setGenerationError(errorMessage);
-      console.error('[Image Generation Error]', error);
+      console.error('[Image Generation Error]', handleApiError(error));
     },
   });
 
@@ -421,13 +480,27 @@ export default function Images() {
 
   // Delete image
   const deleteImage = (id: string) => {
-    setGeneratedImages(prev => prev.filter(img => img.id !== id));
+    setGeneratedImages(prev => {
+      const removed = prev.find(img => img.id === id);
+      if (removed?.url.startsWith('blob:')) {
+        URL.revokeObjectURL(removed.url);
+        ownedBlobUrlsRef.current.delete(removed.url);
+      }
+      return prev.filter(img => img.id !== id);
+    });
     if (selectedImage?.id === id) setSelectedImage(null);
   };
 
   // Delete selected images
   const deleteSelected = () => {
-    setGeneratedImages(prev => prev.filter(img => !selectedImages.has(img.id)));
+    setGeneratedImages(prev => {
+      prev.filter(img => selectedImages.has(img.id) && img.url.startsWith('blob:'))
+        .forEach(img => {
+          URL.revokeObjectURL(img.url);
+          ownedBlobUrlsRef.current.delete(img.url);
+        });
+      return prev.filter(img => !selectedImages.has(img.id));
+    });
     setSelectedImages(new Set());
     setIsSelectMode(false);
   };

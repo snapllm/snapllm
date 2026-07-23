@@ -42,6 +42,7 @@ import {
   ContextQueryRequest,
   ContextQueryResponse,
   ContextStatsResponse,
+  ContextTierChangeResponse,
 } from '../lib/api';
 
 // ============================================================================
@@ -68,7 +69,7 @@ export const useHealth = (options?: UseQueryOptions<HealthResponse, Error>) => {
     queryKey: queryKeys.health,
     queryFn: getHealth,
     refetchInterval: 10000, // Refetch every 10 seconds
-    retry: 1,
+    retry: false,
     ...options,
   });
 };
@@ -80,7 +81,7 @@ export const useHealth = (options?: UseQueryOptions<HealthResponse, Error>) => {
 export const useModels = (options?: UseQueryOptions<ModelListResponse, Error>) => {
   return useQuery<ModelListResponse, Error>({
     queryKey: queryKeys.modelList(),
-    queryFn: listModels,
+    queryFn: () => listModels(),
     refetchInterval: 5000, // Refetch every 5 seconds
     ...options,
   });
@@ -311,11 +312,11 @@ export const useDeleteContext = (
  * Hook to promote context to hot tier (GPU)
  */
 export const usePromoteContext = (
-  options?: UseMutationOptions<{ status: string; message: string; new_tier: string }, Error, string>
+  options?: UseMutationOptions<ContextTierChangeResponse, Error, string>
 ) => {
   const queryClient = useQueryClient();
 
-  return useMutation<{ status: string; message: string; new_tier: string }, Error, string>({
+  return useMutation<ContextTierChangeResponse, Error, string>({
     mutationFn: promoteContext,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.contexts });
@@ -331,11 +332,11 @@ export const usePromoteContext = (
  * Hook to demote context to cold tier (disk)
  */
 export const useDemoteContext = (
-  options?: UseMutationOptions<{ status: string; message: string; new_tier: string }, Error, string>
+  options?: UseMutationOptions<ContextTierChangeResponse, Error, string>
 ) => {
   const queryClient = useQueryClient();
 
-  return useMutation<{ status: string; message: string; new_tier: string }, Error, string>({
+  return useMutation<ContextTierChangeResponse, Error, string>({
     mutationFn: demoteContext,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.contexts });

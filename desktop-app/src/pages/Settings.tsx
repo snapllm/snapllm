@@ -7,6 +7,7 @@ import {
   FolderOpen,
   HardDrive,
   Info,
+  KeyRound,
   Network,
   Save,
   Server,
@@ -22,7 +23,9 @@ import {
   getConfigRecommendations,
   getDefaultModelsPath,
   getDefaultWorkspacePath,
+  getRuntimeApiKeyValidationError,
   handleApiError,
+  setRuntimeApiKey,
   updateConfig,
 } from '../lib/api';
 import { Alert, Badge, Button, Card, Input, Select, Toggle } from '../components/ui';
@@ -166,6 +169,9 @@ export default function SettingsPage() {
   const [saveMessage, setSaveMessage] = React.useState<string | null>(null);
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [restartFields, setRestartFields] = React.useState<string[]>([]);
+  const [apiKey, setApiKey] = React.useState('');
+  const [apiKeyStatus, setApiKeyStatus] = React.useState<string | null>(null);
+  const [apiKeyError, setApiKeyError] = React.useState<string | null>(null);
 
   const isConnected = config?.status === 'success';
   const features = config?.features || {};
@@ -231,6 +237,20 @@ export default function SettingsPage() {
     }
   };
 
+  const handleApplyApiKey = () => {
+    const validationError = getRuntimeApiKeyValidationError(apiKey);
+    if (validationError) {
+      setApiKeyError(validationError);
+      setApiKeyStatus(null);
+      return;
+    }
+    setRuntimeApiKey(apiKey);
+    setApiKey('');
+    setApiKeyError(null);
+    setApiKeyStatus(apiKey ? 'API key applied for this app session.' : 'API key cleared.');
+    void queryClient.invalidateQueries();
+  };
+
   const handleSave = () => {
     if (!formState) return;
     const validation = validateForm(formState);
@@ -253,7 +273,7 @@ export default function SettingsPage() {
         max_concurrent_requests: Number(formState.max_concurrent_requests),
       },
       workspace: {
-        root: formState.workspace_root.trim(),
+        workspace_root: formState.workspace_root.trim(),
         default_models_path: formState.default_models_path.trim(),
       },
       runtime: {
@@ -411,6 +431,34 @@ export default function SettingsPage() {
                 min={1}
                 max={128}
               />
+            </div>
+            <div className="space-y-2">
+              <div className="flex flex-col gap-2 md:flex-row md:items-end">
+                <div className="flex-1">
+                  <Input
+                    label="API Key"
+                    type="password"
+                    value={apiKey}
+                    onChange={(event) => {
+                      setApiKey(event.target.value);
+                      setApiKeyError(null);
+                      setApiKeyStatus(null);
+                    }}
+                    error={apiKeyError || undefined}
+                    hint="Held in memory for this app session only"
+                    leftIcon={<KeyRound className="w-4 h-4" />}
+                    autoComplete="off"
+                  />
+                </div>
+                <Button variant="secondary" onClick={handleApplyApiKey}>
+                  {apiKey ? 'Apply Key' : 'Clear Key'}
+                </Button>
+              </div>
+              {apiKeyStatus && (
+                <p className="text-sm text-success-600 dark:text-success-400" role="status">
+                  {apiKeyStatus}
+                </p>
+              )}
             </div>
             <Toggle
               checked={formState?.cors_enabled ?? true}
@@ -609,7 +657,7 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <p className="text-sm font-medium text-surface-900 dark:text-white">Local API</p>
-                  <p className="text-xs text-surface-500">No auth, localhost only</p>
+                  <p className="text-xs text-surface-500">Loopback by default; API key supported</p>
                 </div>
               </div>
             </div>

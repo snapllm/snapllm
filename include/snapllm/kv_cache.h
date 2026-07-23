@@ -3,7 +3,7 @@
  * @brief KV Cache Data Structures for vPID L2
  *
  * Defines the core data structures for Key-Value cache storage
- * that enables O(1) context query after ingestion.
+ * that avoids recomputing the ingested prefix for each query.
  *
  * KV Cache Structure:
  * - Per-layer K and V tensors
@@ -30,6 +30,8 @@
 #include <optional>
 #include <chrono>
 #include <algorithm>
+#include <array>
+#include <limits>
 
 namespace snapllm {
 
@@ -47,6 +49,57 @@ enum class KVDataType : uint32_t {
     INT8 = 3,   ///< 8-bit quantized (1 byte)
     INT4 = 4    ///< 4-bit quantized (0.5 bytes, packed)
 };
+
+inline bool is_supported_kv_dtype(KVDataType dtype) {
+    switch (dtype) {
+        case KVDataType::FP32:
+        case KVDataType::FP16:
+        case KVDataType::BF16:
+        case KVDataType::INT8:
+        case KVDataType::INT4:
+            return true;
+        default:
+            return false;
+    }
+}
+
+namespace kv_cache_detail {
+
+inline bool checked_multiply(size_t lhs, size_t rhs, size_t& result) {
+    if (lhs != 0 && rhs > (std::numeric_limits<size_t>::max)() / lhs) {
+        return false;
+    }
+    result = lhs * rhs;
+    return true;
+}
+
+class CRC32 {
+public:
+    void update(const void* data, size_t size) {
+        const auto* bytes = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < size; ++i) {
+            crc_ ^= bytes[i];
+            for (int bit = 0; bit < 8; ++bit) {
+                crc_ = (crc_ >> 1) ^ (0xEDB88320U & (0U - (crc_ & 1U)));
+            }
+        }
+    }
+
+    uint32_t value() const {
+        return ~crc_;
+    }
+
+private:
+    uint32_t crc_ = 0xFFFFFFFFU;
+};
+
+template <size_t N>
+std::string bounded_string(const char (&value)[N]) {
+    const char* end = std::find(value, value + N, '\0');
+    return std::string(value, end);
+}
+
+} // namespace kv_cache_detail
 
 /**
  * @brief Get size in bytes for a data type
@@ -96,12 +149,24 @@ struct KVCacheShape {
      * @brief Calculate size in bytes for one layer (K or V)
      */
     size_t layer_tensor_size() const {
-        size_t elem_size = kv_dtype_size(dtype);
+        size_t element_count = 0;
+        size_t heads_times_sequence = 0;
+        if (!is_supported_kv_dtype(dtype) ||
+            !kv_cache_detail::checked_multiply(num_heads, sequence_length, heads_times_sequence) ||
+            !kv_cache_detail::checked_multiply(heads_times_sequence, head_dim, element_count)) {
+            return 0;
+        }
+
         if (dtype == KVDataType::INT4) {
             // INT4 packs 2 values per byte
-            return (num_heads * sequence_length * head_dim + 1) / 2;
+            return element_count / 2 + element_count % 2;
         }
-        return num_heads * sequence_length * head_dim * elem_size;
+
+        size_t tensor_size = 0;
+        if (!kv_cache_detail::checked_multiply(element_count, kv_dtype_size(dtype), tensor_size)) {
+            return 0;
+        }
+        return tensor_size;
     }
 
     /**
@@ -109,7 +174,15 @@ struct KVCacheShape {
      */
     size_t total_size() const {
         // 2 tensors (K, V) per layer
-        return 2 * num_layers * layer_tensor_size();
+        size_t layer_size = layer_tensor_size();
+        size_t all_layers = 0;
+        size_t total = 0;
+        if (layer_size == 0 ||
+            !kv_cache_detail::checked_multiply(num_layers, layer_size, all_layers) ||
+            !kv_cache_detail::checked_multiply(2, all_layers, total)) {
+            return 0;
+        }
+        return total;
     }
 
     /**
@@ -127,7 +200,9 @@ struct KVCacheShape {
     }
 
     bool is_valid() const {
-        return num_layers > 0 && num_heads > 0 && head_dim > 0 && sequence_length > 0;
+        return num_layers > 0 && num_heads > 0 && head_dim > 0 &&
+               sequence_length > 0 && is_supported_kv_dtype(dtype) &&
+               layer_tensor_size() > 0 && total_size() > 0;
     }
 };
 
@@ -192,7 +267,7 @@ struct KVLayerCache {
  * @brief Complete KV cache for a context
  *
  * Contains all layer KV caches for a pre-processed context.
- * This is the core data structure that enables O(1) query access.
+ * This is the core data structure used to reuse ingested context state.
  */
 struct KVCache {
     std::string context_id;       ///< Unique context identifier
@@ -386,11 +461,121 @@ struct KVCacheFileHeader {
         model_id[len] = '\0';
     }
 
-    std::string get_context_id() const { return std::string(context_id); }
-    std::string get_model_id() const { return std::string(model_id); }
+    std::string get_context_id() const { return kv_cache_detail::bounded_string(context_id); }
+    std::string get_model_id() const { return kv_cache_detail::bounded_string(model_id); }
 };
 
 static_assert(sizeof(KVCacheFileHeader) == 256, "KVCacheFileHeader must be 256 bytes");
+
+namespace kv_cache_detail {
+
+inline constexpr uint32_t KVC_FORMAT_VERSION = 1;
+inline constexpr uint32_t MAX_KVC_LAYERS = 512;
+inline constexpr uint32_t MAX_KVC_HEADS = 1024;
+inline constexpr uint32_t MAX_KVC_HEAD_DIM = 8192;
+inline constexpr uint32_t MAX_KVC_SEQUENCE_LENGTH = 1024 * 1024;
+inline constexpr uint64_t MAX_KVC_DATA_SIZE = 8ULL * 1024 * 1024 * 1024;
+
+enum class HeaderValidationError {
+    None,
+    InvalidMagic,
+    UnsupportedVersion,
+    UnsupportedFlags,
+    UnsupportedDataType,
+    InvalidDimensions,
+    DimensionLimitExceeded,
+    SizeOverflow,
+    DataSizeMismatch,
+    DataSizeLimitExceeded,
+    FileSizeMismatch,
+    HeaderChecksumMismatch
+};
+
+inline uint32_t compute_checksum(const void* data, size_t size) {
+    CRC32 checksum;
+    checksum.update(data, size);
+    return checksum.value();
+}
+
+inline uint32_t compute_header_checksum(const KVCacheFileHeader& header) {
+    std::array<uint8_t, sizeof(KVCacheFileHeader)> bytes{};
+    std::memcpy(bytes.data(), &header, bytes.size());
+    std::fill_n(
+        bytes.begin() + offsetof(KVCacheFileHeader, header_checksum),
+        sizeof(header.header_checksum),
+        uint8_t{0}
+    );
+    return compute_checksum(bytes.data(), bytes.size());
+}
+
+inline HeaderValidationError validate_file_header(
+    const KVCacheFileHeader& header,
+    uint64_t file_size,
+    size_t& tensor_size
+) {
+    if (!header.is_valid()) {
+        return HeaderValidationError::InvalidMagic;
+    }
+    if (header.version != KVC_FORMAT_VERSION) {
+        return HeaderValidationError::UnsupportedVersion;
+    }
+    if (header.flags != 0) {
+        return HeaderValidationError::UnsupportedFlags;
+    }
+    if (header.dtype > static_cast<uint32_t>(KVDataType::INT4)) {
+        return HeaderValidationError::UnsupportedDataType;
+    }
+    if (header.num_layers == 0 || header.num_heads == 0 ||
+        header.head_dim == 0 || header.sequence_length == 0) {
+        return HeaderValidationError::InvalidDimensions;
+    }
+    if (header.num_layers > MAX_KVC_LAYERS ||
+        header.num_heads > MAX_KVC_HEADS ||
+        header.head_dim > MAX_KVC_HEAD_DIM ||
+        header.sequence_length > MAX_KVC_SEQUENCE_LENGTH) {
+        return HeaderValidationError::DimensionLimitExceeded;
+    }
+
+    const KVCacheShape shape = header.get_shape();
+    tensor_size = shape.layer_tensor_size();
+    const size_t expected_data_size = shape.total_size();
+    if (tensor_size == 0 || expected_data_size == 0) {
+        return HeaderValidationError::SizeOverflow;
+    }
+    if (expected_data_size > MAX_KVC_DATA_SIZE) {
+        return HeaderValidationError::DataSizeLimitExceeded;
+    }
+    if (header.data_size != expected_data_size) {
+        return HeaderValidationError::DataSizeMismatch;
+    }
+    if (file_size != sizeof(KVCacheFileHeader) + header.data_size) {
+        return HeaderValidationError::FileSizeMismatch;
+    }
+    if (header.header_checksum != compute_header_checksum(header)) {
+        return HeaderValidationError::HeaderChecksumMismatch;
+    }
+    return HeaderValidationError::None;
+}
+
+inline const char* validation_error_message(HeaderValidationError error) {
+    switch (error) {
+        case HeaderValidationError::None: return "none";
+        case HeaderValidationError::InvalidMagic: return "invalid magic";
+        case HeaderValidationError::UnsupportedVersion: return "unsupported version";
+        case HeaderValidationError::UnsupportedFlags: return "unsupported flags";
+        case HeaderValidationError::UnsupportedDataType: return "unsupported data type";
+        case HeaderValidationError::InvalidDimensions: return "invalid dimensions";
+        case HeaderValidationError::DimensionLimitExceeded: return "dimension limit exceeded";
+        case HeaderValidationError::SizeOverflow: return "size overflow";
+        case HeaderValidationError::DataSizeMismatch: return "data size mismatch";
+        case HeaderValidationError::DataSizeLimitExceeded: return "data size limit exceeded";
+        case HeaderValidationError::FileSizeMismatch: return "file size mismatch";
+        case HeaderValidationError::HeaderChecksumMismatch: return "header checksum mismatch";
+    }
+    return "unknown validation error";
+}
+
+} // namespace kv_cache_detail
 
 //=============================================================================
 // KV Cache Configuration

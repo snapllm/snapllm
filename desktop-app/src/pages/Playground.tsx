@@ -27,7 +27,13 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { listModels, getApiBaseUrl } from '../lib/api';
+import {
+  fetchProtectedAsset,
+  getApiBaseUrl,
+  getApiTransportBaseUrl,
+  getRuntimeRequestHeaders,
+  listModels,
+} from '../lib/api';
 import { Badge, Button, Card, IconButton, Input, SearchInput, Tabs } from '../components/ui';
 // ============================================================================
 // Types
@@ -170,7 +176,7 @@ const API_ENDPOINTS: ApiEndpoint[] = [
     name: 'Switch Model',
     method: 'POST',
     path: '/api/v1/models/switch',
-    description: 'Switch active model (<1ms)',
+    description: 'Switch to an already loaded model',
     category: 'models',
   },
   {
@@ -480,6 +486,7 @@ const extractImageUrls = (payload: any, apiBaseUrl: string): string[] => {
 
 export default function Playground() {
   const apiBaseUrl = getApiBaseUrl();
+  const apiTransportBaseUrl = getApiTransportBaseUrl();
 
   const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpoint>(API_ENDPOINTS[0]);
   const [pathOverride, setPathOverride] = useState(API_ENDPOINTS[0].path);
@@ -587,17 +594,50 @@ export default function Playground() {
 
   const connectionStatus = isError ? 'offline' : isFetching ? 'checking' : 'online';
 
-  const fullUrl = useMemo(() => {
+  const requestPath = useMemo(() => {
     const trimmedPath = (pathOverride || selectedEndpoint.path).trim();
     const normalizedPath = trimmedPath.startsWith('/') ? trimmedPath : `/${trimmedPath}`;
     const rawQuery = queryString.trim();
     const normalizedQuery = rawQuery ? (rawQuery.startsWith('?') ? rawQuery.slice(1) : rawQuery) : '';
-    return `${apiBaseUrl}${normalizedPath}${normalizedQuery ? `?${normalizedQuery}` : ''}`;
-  }, [apiBaseUrl, pathOverride, queryString, selectedEndpoint.path]);
+    return `${normalizedPath}${normalizedQuery ? `?${normalizedQuery}` : ''}`;
+  }, [pathOverride, queryString, selectedEndpoint.path]);
+  const fullUrl = `${apiBaseUrl}${requestPath}`;
+  const requestUrl = `${apiTransportBaseUrl}${requestPath}`;
 
   const pathNeedsReplacement = /\{[^}]+\}|:\w+/.test(pathOverride);
 
-  const responseImages = useMemo(() => extractImageUrls(responseJson, apiBaseUrl), [responseJson, apiBaseUrl]);
+  const responseImageSources = useMemo(
+    () => extractImageUrls(responseJson, apiBaseUrl),
+    [responseJson, apiBaseUrl],
+  );
+  const [responseImages, setResponseImages] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let blobUrls: string[] = [];
+    const loadImages = async () => {
+      const resolved = await Promise.all(responseImageSources.map(async (url) => {
+        if (url.startsWith('data:')) return url;
+        try {
+          const blobUrl = await fetchProtectedAsset(url);
+          if (cancelled) {
+            URL.revokeObjectURL(blobUrl);
+            return '';
+          }
+          blobUrls.push(blobUrl);
+          return blobUrl;
+        } catch {
+          return '';
+        }
+      }));
+      if (!cancelled) setResponseImages(resolved.filter(Boolean));
+    };
+    void loadImages();
+    return () => {
+      cancelled = true;
+      blobUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [responseImageSources]);
 
   const updateRequestBody = (value: string) => {
     setRequestBody(value);
@@ -647,10 +687,11 @@ export default function Playground() {
     const startTime = performance.now();
 
     try {
-      const response = await fetch(fullUrl, {
+      const response = await fetch(requestUrl, {
         method: selectedEndpoint.method,
         headers: {
           'Content-Type': 'application/json',
+          ...getRuntimeRequestHeaders(),
         },
         body: supportsBody ? bodyPayload : undefined,
       });

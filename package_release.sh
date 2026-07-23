@@ -6,7 +6,7 @@
 # This script creates a distributable release package with all necessary files.
 #
 # Usage: ./package_release.sh [version]
-# Example: ./package_release.sh 1.0.0
+# Example: ./package_release.sh 1.3.1
 # ============================================================================
 
 set -e
@@ -18,10 +18,23 @@ echo "========================================"
 echo ""
 
 # Get version from argument or use default
-VERSION="${1:-1.0.0}"
+VERSION="${1:-1.3.1}"
+if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "[ERROR] Version must match MAJOR.MINOR.PATCH."
+    exit 1
+fi
 RELEASE_NAME="snapllm-${VERSION}-linux-x64-cuda"
-RELEASE_DIR="releases/${RELEASE_NAME}"
+RELEASES_DIR="$(pwd -P)/releases"
+RELEASE_DIR="${RELEASES_DIR}/${RELEASE_NAME}"
 BUILD_DIR="build_gpu"
+
+case "${RELEASE_DIR}" in
+    "${RELEASES_DIR}"/snapllm-*-linux-x64-cuda) ;;
+    *)
+        echo "[ERROR] Refusing release path outside ${RELEASES_DIR}."
+        exit 1
+        ;;
+esac
 
 # Check if build exists
 if [ ! -f "${BUILD_DIR}/bin/snapllm" ]; then
@@ -98,9 +111,9 @@ echo "${VERSION}" > "${RELEASE_DIR}/VERSION"
 # Create tarball
 echo ""
 echo "[INFO] Creating tarball..."
-cd releases
+cd "${RELEASES_DIR}"
 tar -czvf "${RELEASE_NAME}.tar.gz" "${RELEASE_NAME}"
-cd ..
+cd - >/dev/null
 
 echo ""
 echo "========================================"

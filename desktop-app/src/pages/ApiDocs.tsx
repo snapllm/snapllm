@@ -73,7 +73,7 @@ export default function ApiDocs() {
     {
       method: 'POST',
       path: '/api/v1/models/switch',
-      description: 'Switch active model (<1ms)',
+      description: 'Switch to an already loaded model',
       requestBody: JSON.stringify({
         name: 'my-model',
       }, null, 2),

@@ -856,7 +856,13 @@ export default function Chat() {
     if (messageIndex === -1) return;
 
     // Find the user message that triggered this response
-    const userMessageIndex = messages.slice(0, messageIndex).findLastIndex(m => m.role === 'user');
+    let userMessageIndex = -1;
+    for (let index = messageIndex - 1; index >= 0; index -= 1) {
+      if (messages[index].role === 'user') {
+        userMessageIndex = index;
+        break;
+      }
+    }
     if (userMessageIndex === -1) return;
 
     const userMessage = messages[userMessageIndex];
@@ -970,7 +976,7 @@ export default function Chat() {
               <div className="flex items-center gap-2">
                 <Badge variant="success" dot>Ready</Badge>
                 <span className="text-xs text-surface-500">
-                  {activeModel.performance?.tokensPerSecond?.toFixed(0) || '—'} tok/s
+                  {activeModel.throughput_toks?.toFixed(0) || '—'} tok/s
                 </span>
               </div>
             )}
@@ -1035,6 +1041,7 @@ export default function Chat() {
               {messages.map((message) => (
                 <motion.div
                   key={message.id}
+                  data-testid={`chat-message-${message.role}`}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   className={clsx(
@@ -1205,6 +1212,7 @@ export default function Chat() {
               {/* Typing Indicator / Streaming Display */}
               {(chatMutation.isPending || isStreaming) && (
                 <motion.div
+                  data-testid="chat-streaming-response"
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="flex gap-4"

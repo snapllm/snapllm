@@ -156,7 +156,7 @@ public:
     /**
      * @brief Inject KV cache state into context
      *
-     * Restores previously extracted KV cache, enabling O(1) query
+     * Restores a previously extracted KV cache for reuse by a query.
      * access to the cached context.
      *
      * @param model_name Model to inject into
@@ -261,6 +261,7 @@ private:
     // Previously, get_context() created a new context every call without freeing
     mutable std::mutex context_cache_mutex_;
     std::unordered_map<std::string, llama_context*> cached_contexts_;
+    std::unordered_map<std::string, std::shared_ptr<void>> cached_context_leases_;
 
     // Internal helpers
     llama_context* get_context(const std::string& model_name);

@@ -5,11 +5,78 @@
 
 import axios, { AxiosError } from 'axios';
 import { open } from '@tauri-apps/api/dialog';
-import { readDir, copyFile, removeDir, removeFile, exists, BaseDirectory } from '@tauri-apps/api/fs';
+import { readDir, copyFile, exists } from '@tauri-apps/api/fs';
 
-// Environment-based API URL (defaults to localhost:6930 - CLI HTTP server)
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:6930';
-const API_V1 = `${API_BASE_URL}/api/v1`;
+type BrowserLocation = Pick<Location, 'origin' | 'protocol'>;
+
+export const resolveApiBaseUrl = (
+  configuredUrl: string | undefined,
+  browserLocation: BrowserLocation | undefined,
+): string => {
+  if (configuredUrl) return configuredUrl;
+  if (
+    browserLocation
+    && (browserLocation.protocol === 'http:' || browserLocation.protocol === 'https:')
+  ) {
+    return browserLocation.origin;
+  }
+  return 'http://localhost:6930';
+};
+
+// Browser builds use the serving origin. Tauri/custom-protocol builds fall
+// back to the local CLI server unless VITE_API_URL explicitly overrides it.
+const API_BASE_URL = resolveApiBaseUrl(
+  import.meta.env.VITE_API_URL,
+  typeof window === 'undefined' ? undefined : window.location,
+);
+const API_TRANSPORT_BASE_URL =
+  import.meta.env.DEV && !import.meta.env.VITE_API_URL ? '' : API_BASE_URL;
+const API_V1 = `${API_TRANSPORT_BASE_URL}/api/v1`;
+let runtimeApiKey = '';
+const MIN_API_KEY_LENGTH = 32;
+const MAX_API_KEY_LENGTH = 4096;
+
+type QueryFunctionInvocation = {
+  queryKey: readonly unknown[];
+};
+
+const isQueryFunctionInvocation = (value: unknown): value is QueryFunctionInvocation => (
+  typeof value === 'object'
+  && value !== null
+  && 'queryKey' in value
+);
+
+const getRuntimeHeaders = (): Record<string, string> => (
+  runtimeApiKey ? { Authorization: `Bearer ${runtimeApiKey}` } : {}
+);
+export const getRuntimeRequestHeaders = (): Record<string, string> => getRuntimeHeaders();
+
+/**
+ * Set the API key used for subsequent requests in this renderer session.
+ *
+ * The key is held in memory only. It is not written to config, storage, URLs,
+ * logs, or error messages.
+ */
+export const setRuntimeApiKey = (apiKey: string): void => {
+  const validationError = getRuntimeApiKeyValidationError(apiKey);
+  if (validationError) {
+    throw new TypeError(validationError);
+  }
+  runtimeApiKey = apiKey;
+};
+
+export const getRuntimeApiKeyValidationError = (apiKey: string): string | null => {
+  if (apiKey.length === 0) {
+    return null;
+  }
+  if (apiKey.length < MIN_API_KEY_LENGTH || apiKey.length > MAX_API_KEY_LENGTH) {
+    return `API key must be ${MIN_API_KEY_LENGTH}-${MAX_API_KEY_LENGTH} characters.`;
+  }
+  if (!/^[\x21-\x7E]+$/.test(apiKey)) {
+    return 'API key must contain visible ASCII characters only, without spaces.';
+  }
+  return null;
+};
 
 // ============================================================================
 // Model Type Detection (mirrors server-side logic)
@@ -89,6 +156,13 @@ export const api = axios.create({
   timeout: 300000, // 5 minutes
 });
 
+api.interceptors.request.use((config) => {
+  if (runtimeApiKey) {
+    config.headers.set('Authorization', `Bearer ${runtimeApiKey}`);
+  }
+  return config;
+});
+
 // ============================================================================
 // Types matching FastAPI schemas
 // ============================================================================
@@ -97,8 +171,6 @@ export interface HealthResponse {
   status: string;
   version: string;
   timestamp: string;
-  models_loaded: number;
-  current_model: string | null;
 }
 
 export interface ModelInfo {
@@ -253,7 +325,12 @@ export interface StreamToken {
 }
 
 export interface ErrorResponse {
-  detail: string;
+  detail?: string;
+  error?: {
+    message?: string;
+    type?: string;
+    code?: number;
+  };
 }
 
 export interface CacheStats {
@@ -266,6 +343,13 @@ export interface CacheStats {
   generation_hit_rate: number;
   estimated_speedup: number;
   memory_usage_mb: number;
+  workspace_total_mb?: number;
+  workspace_used_mb?: number;
+  tensor_cache_used_mb?: number;
+  tensor_cache_budget_mb?: number;
+  tensor_cache_utilization?: number;
+  tensor_cache_hit_rate?: number;
+  cached_tensor_count?: number;
 }
 
 export interface CacheStatsResponse {
@@ -293,7 +377,8 @@ export interface CacheStatsResponse {
 
 export const getHealth = async (): Promise<HealthResponse> => {
   const { data } = await api.get('/health', {
-    baseURL: API_BASE_URL, // Health is at root
+    baseURL: API_TRANSPORT_BASE_URL, // Health is at root
+    timeout: 5000,
   });
   return data;
 };
@@ -304,7 +389,12 @@ export const getHealth = async (): Promise<HealthResponse> => {
 
 export type ModelTypeFilter = 'llm' | 'diffusion' | 'vision' | 'text' | 'sd' | 'image';
 
-export const listModels = async (typeFilter?: ModelTypeFilter): Promise<ModelListResponse> => {
+export const listModels = async (
+  typeFilterOrQueryContext?: ModelTypeFilter | QueryFunctionInvocation
+): Promise<ModelListResponse> => {
+  const typeFilter = isQueryFunctionInvocation(typeFilterOrQueryContext)
+    ? undefined
+    : typeFilterOrQueryContext;
   const params = typeFilter ? { type: typeFilter } : {};
   const { data } = await api.get('/models/', { params });
   return data;
@@ -387,6 +477,32 @@ export const generateImage = async (request: ImageGenerateRequest): Promise<Imag
   return data;
 };
 
+/**
+ * Download a protected server asset with the in-memory API key and expose it
+ * as a renderer-local blob URL. Callers own the returned URL and must revoke it.
+ */
+export const fetchProtectedAsset = async (sourceUrl: string): Promise<string> => {
+  const trustedBase = new URL(API_BASE_URL);
+  const parsedUrl = new URL(sourceUrl, trustedBase);
+  if (
+    parsedUrl.origin !== trustedBase.origin
+    || !/^\/api\/v1\/images\/[^/]+\.png$/.test(parsedUrl.pathname)
+  ) {
+    throw new TypeError('Protected asset URL is outside the SnapLLM image endpoint');
+  }
+  let requestUrl = parsedUrl.toString();
+  if (import.meta.env.DEV && !import.meta.env.VITE_API_URL) {
+    requestUrl = parsedUrl.pathname;
+  }
+  const response = await axios.get<Blob>(requestUrl, {
+    baseURL: API_TRANSPORT_BASE_URL,
+    headers: getRuntimeHeaders(),
+    responseType: 'blob',
+    timeout: 300000,
+  });
+  return URL.createObjectURL(response.data);
+};
+
 export interface DiffusionModel {
   id: string;
   name: string;
@@ -462,7 +578,7 @@ export class StreamingClient {
     this.abortController = new AbortController();
 
     // Use fetch with SSE for streaming via /v1/chat/completions
-    const streamUrl = `${API_BASE_URL}/v1/chat/completions`;
+    const streamUrl = `${API_TRANSPORT_BASE_URL}/v1/chat/completions`;
 
     console.log('[StreamingClient] Starting SSE stream to', streamUrl);
 
@@ -474,6 +590,7 @@ export class StreamingClient {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
+        ...getRuntimeHeaders(),
       },
       body: JSON.stringify({
         model: request.model || 'default',
@@ -545,7 +662,7 @@ export class StreamingClient {
                   return;
                 }
               } catch (parseError) {
-                console.warn('[StreamingClient] Parse error:', parseError, 'Data:', data);
+                console.warn('[StreamingClient] Parse error:', handleApiError(parseError));
               }
             }
           }
@@ -560,7 +677,7 @@ export class StreamingClient {
         if (error.name === 'AbortError') {
           console.log('[StreamingClient] Stream aborted by user');
         } else {
-          console.error('[StreamingClient] Stream error:', error);
+          console.error('[StreamingClient] Stream error:', handleApiError(error));
           this.onErrorCallback?.(error);
         }
       });
@@ -589,6 +706,9 @@ export const handleApiError = (error: unknown): string => {
 
     if (axiosError.response?.data?.detail) {
       return axiosError.response.data.detail;
+    }
+    if (axiosError.response?.data?.error?.message) {
+      return axiosError.response.data.error.message;
     }
 
     if (axiosError.response?.status === 404) {
@@ -643,7 +763,7 @@ export const selectModelFile = async (): Promise<string | null> => {
     }
     return selected;
   } catch (error) {
-    console.error('[selectModelFile] Error:', error);
+    console.error('[selectModelFile] Error:', handleApiError(error));
     return null;
   }
 };
@@ -666,7 +786,7 @@ export const selectModelsFolder = async (): Promise<string | null> => {
     }
     return selected;
   } catch (error) {
-    console.error('[selectModelsFolder] Error:', error);
+    console.error('[selectModelsFolder] Error:', handleApiError(error));
     return null;
   }
 };
@@ -701,7 +821,7 @@ export const scanFolder = async (folderPath: string): Promise<string[]> => {
       console.error('[scanFolder] Backend error:', data.error);
     }
   } catch (error: any) {
-    console.warn('[scanFolder] Backend scan failed:', error?.message || error);
+    console.warn('[scanFolder] Backend scan failed:', handleApiError(error));
     console.warn('[scanFolder] Falling back to Tauri...');
   }
 
@@ -719,7 +839,7 @@ export const scanFolder = async (folderPath: string): Promise<string[]> => {
       console.log('[scanFolder] Tauri found:', ggufFiles.length, 'models');
       return ggufFiles;
     } catch (error) {
-      console.error('[scanFolder] Tauri readDir failed:', error);
+      console.error('[scanFolder] Tauri readDir failed:', handleApiError(error));
     }
   } else {
     console.log('[scanFolder] Tauri not available');
@@ -737,7 +857,7 @@ export const scanFolderExtended = async (folderPath: string): Promise<ScannedMod
       return data.models;
     }
   } catch (error) {
-    console.warn('[scanFolderExtended] Backend scan failed:', error);
+    console.warn('[scanFolderExtended] Backend scan failed:', handleApiError(error));
   }
   return [];
 };
@@ -748,7 +868,6 @@ export const scanFolderExtended = async (folderPath: string): Promise<ScannedMod
 
 export const sendChatMessage = async (params: {
   model?: string;
-  use_context_cache?: boolean; // vPID L2
   messages: Array<{ role: string; content: string }>;
   max_tokens?: number;
   temperature?: number;
@@ -762,13 +881,11 @@ export const sendChatMessage = async (params: {
   stream?: boolean;
   use_context_cache?: boolean; // vPID L2: Enable context KV cache
 }): Promise<any> => {
-  const { data} = await axios.post(
-    `${API_BASE_URL}/v1/chat/completions`,
+  const { data } = await api.post(
+    '/v1/chat/completions',
     params,
     {
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      baseURL: API_TRANSPORT_BASE_URL,
       timeout: 300000, // 5 minutes
     }
   );
@@ -782,7 +899,7 @@ export const getServerStatus = async (): Promise<any> => {
   } catch (error) {
     // Fall back to health endpoint for CLI server mode
     try {
-      const { data } = await api.get('/health', { baseURL: API_BASE_URL });
+      const { data } = await api.get('/health', { baseURL: API_TRANSPORT_BASE_URL });
       return { status: data.status, models_loaded: data.models_loaded };
     } catch {
       return { status: 'offline', models_loaded: 0 };
@@ -884,7 +1001,10 @@ export const getWorkspaceFolders = async (): Promise<WorkspaceFolderInfo[]> => {
         files: fileCount,
       });
     } catch (error) {
-      console.error(`[getWorkspaceFolders] Error checking ${folder.path}:`, error);
+      console.error(
+        `[getWorkspaceFolders] Error checking ${folder.path}:`,
+        handleApiError(error),
+      );
       results.push({
         path: folder.path,
         name: folder.name,
@@ -899,21 +1019,10 @@ export const getWorkspaceFolders = async (): Promise<WorkspaceFolderInfo[]> => {
 
 // Delete a workspace folder
 export const deleteWorkspaceFolder = async (folderPath: string): Promise<boolean> => {
-  try {
-    const folderExists = await exists(folderPath);
-    if (!folderExists) {
-      console.log(`[deleteWorkspaceFolder] Folder does not exist: ${folderPath}`);
-      return true;
-    }
-
-    // Remove the directory and all its contents
-    await removeDir(folderPath, { recursive: true });
-    console.log(`[deleteWorkspaceFolder] Successfully deleted: ${folderPath}`);
-    return true;
-  } catch (error) {
-    console.error(`[deleteWorkspaceFolder] Error deleting ${folderPath}:`, error);
-    throw new Error(`Failed to delete folder: ${error}`);
-  }
+  void folderPath;
+  throw new Error(
+    'Recursive workspace deletion is disabled. Remove the selected folder outside SnapLLM after stopping the server.',
+  );
 };
 
 // Clear all vPID cache (tensors)
@@ -940,8 +1049,13 @@ export const clearEntireWorkspace = async (): Promise<boolean> => {
   return deleteWorkspaceFolder(workspaceRoot);
 };
 
-export const scanModelsFolder = async (customPath?: string): Promise<string[]> => {
+export const scanModelsFolder = async (
+  customPathOrQueryContext?: string | QueryFunctionInvocation
+): Promise<string[]> => {
   try {
+    const customPath = isQueryFunctionInvocation(customPathOrQueryContext)
+      ? undefined
+      : customPathOrQueryContext;
     let modelsPath = customPath || DEFAULT_MODELS_PATH;
     if (!customPath) {
       try {
@@ -954,6 +1068,10 @@ export const scanModelsFolder = async (customPath?: string): Promise<string[]> =
       }
     }
 
+    if (!isTauriAvailable()) {
+      return [];
+    }
+
     const entries = await readDir(modelsPath, { recursive: false });
 
     // Filter for .gguf files and return full paths
@@ -963,7 +1081,7 @@ export const scanModelsFolder = async (customPath?: string): Promise<string[]> =
 
     return ggufFiles;
   } catch (error) {
-    console.error('[scanModelsFolder] Error scanning directory:', error);
+    console.error('[scanModelsFolder] Error scanning directory:', handleApiError(error));
     return [];
   }
 };
@@ -996,7 +1114,7 @@ export const copyModelToFolder = async (sourcePath: string): Promise<string> => 
     console.log(`[copyModelToFolder] Copied ${filename} to models folder`);
     return destPath;
   } catch (error) {
-    console.error('[copyModelToFolder] Error copying file:', error);
+    console.error('[copyModelToFolder] Error copying file:', handleApiError(error));
     throw new Error(`Failed to copy model file: ${error}`);
   }
 };
@@ -1146,6 +1264,12 @@ export interface ContextStatsResponse {
   };
 }
 
+export interface ContextTierChangeResponse {
+  status: string;
+  message: string;
+  current_tier: string;
+}
+
 // Ingest a context (pre-compute KV cache) - O(n^2) operation
 export const ingestContext = async (request: ContextIngestRequest): Promise<ContextIngestResponse> => {
   const { data } = await api.post('/contexts/ingest', request, { timeout: 600000 }); // 10 min timeout for large docs
@@ -1173,31 +1297,31 @@ export const listContexts = async (tier?: string, model_id?: string): Promise<Co
 
 // Get a specific context
 export const getContext = async (contextId: string): Promise<Context> => {
-  const { data } = await api.get(`/contexts/${contextId}`);
-  return data;
+  const { data } = await api.get(`/contexts/${encodeURIComponent(contextId)}`);
+  return data.context;
 };
 
 // Query with cached context - O(1) lookup + O(q^2) for query only
 export const queryContext = async (contextId: string, request: ContextQueryRequest): Promise<ContextQueryResponse> => {
-  const { data } = await api.post(`/contexts/${contextId}/query`, request);
+  const { data } = await api.post(`/contexts/${encodeURIComponent(contextId)}/query`, request);
   return data;
 };
 
 // Delete a context
 export const deleteContext = async (contextId: string): Promise<{ status: string; message: string }> => {
-  const { data } = await api.delete(`/contexts/${contextId}`);
+  const { data } = await api.delete(`/contexts/${encodeURIComponent(contextId)}`);
   return data;
 };
 
 // Promote context to hot tier (GPU)
-export const promoteContext = async (contextId: string): Promise<{ status: string; message: string; new_tier: string }> => {
-  const { data } = await api.post(`/contexts/${contextId}/promote`);
+export const promoteContext = async (contextId: string): Promise<ContextTierChangeResponse> => {
+  const { data } = await api.post(`/contexts/${encodeURIComponent(contextId)}/promote`, { tier: 'hot' });
   return data;
 };
 
 // Demote context to cold tier (disk)
-export const demoteContext = async (contextId: string): Promise<{ status: string; message: string; new_tier: string }> => {
-  const { data } = await api.post(`/contexts/${contextId}/demote`);
+export const demoteContext = async (contextId: string): Promise<ContextTierChangeResponse> => {
+  const { data } = await api.post(`/contexts/${encodeURIComponent(contextId)}/demote`, { tier: 'cold' });
   return data;
 };
 
@@ -1265,7 +1389,7 @@ export interface ConfigUpdateRequest {
     max_concurrent_requests?: number;
   };
   workspace?: {
-    root?: string;
+    workspace_root?: string;
     default_models_path?: string;
   };
   runtime?: {
@@ -1297,6 +1421,7 @@ export interface ConfigUpdateResponse {
 }
 
 export const getApiBaseUrl = (): string => API_BASE_URL;
+export const getApiTransportBaseUrl = (): string => API_TRANSPORT_BASE_URL;
 export const getApiVersion = (): string => 'v1';
 
 export default api;

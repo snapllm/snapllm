@@ -23,7 +23,7 @@ import {
   Play,
   BarChart3,
 } from 'lucide-react';
-import { listModels, switchModel, getHealth, getMetrics } from '../lib/api';
+import { listModels, switchModel, getHealth, getMetrics, handleApiError } from '../lib/api';
 import { useModelStore } from '../store';
 import { Button, IconButton, Badge, Card, Progress } from '../components/ui';
 
@@ -89,7 +89,7 @@ export default function QuickSwitch() {
         }, ...prev].slice(0, 10));
       }
     } catch (error) {
-      console.error('[QuickSwitch] Failed to switch model:', error);
+      console.error('[QuickSwitch] Failed to switch model:', handleApiError(error));
     } finally {
       setIsSwitching(false);
     }
@@ -114,16 +114,15 @@ export default function QuickSwitch() {
                 Quick Switch
               </h1>
               <p className="text-sky-100 max-w-lg">
-                Ultra-fast model switching powered by vPID (Virtual Processing-In-Disk) architecture.
-                Switch between loaded models in under 1ms.
+                Loaded-model switching powered by vPID (Virtual Processing-In-Disk) architecture.
+                Actual timing depends on residency, hardware, and memory pressure.
               </p>
             </div>
           </div>
 
           <div className="text-right">
             <div className="text-5xl font-bold text-white mb-1">
-              {lastSwitchTime !== null ? `${lastSwitchTime.toFixed(2)}` : '< 1'}
-              <span className="text-2xl ml-1">ms</span>
+              {lastSwitchTime !== null ? `${lastSwitchTime.toFixed(2)} ms` : 'N/A'}
             </div>
             <p className="text-sky-200 text-sm">Last switch time</p>
           </div>
@@ -153,7 +152,7 @@ export default function QuickSwitch() {
             </div>
             <div>
               <p className="text-2xl font-bold text-surface-900 dark:text-white">
-                {avgSwitchTime > 0 ? `${avgSwitchTime.toFixed(2)}ms` : '< 1ms'}
+                {avgSwitchTime > 0 ? `${avgSwitchTime.toFixed(2)}ms` : 'N/A'}
               </p>
               <p className="text-sm text-surface-500">Avg Switch Time</p>
             </div>
@@ -349,4 +348,3 @@ export default function QuickSwitch() {
     </div>
   );
 }
-

@@ -89,12 +89,12 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = memo(({
         remarkPlugins={[remarkGfm]}
         components={{
           // Code blocks
-          code({ node, inline, className, children, ...props }) {
+          code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || '');
             const language = match ? match[1] : '';
             const value = String(children).replace(/\n$/, '');
 
-            if (!inline && (match || value.includes('\n'))) {
+            if (match || value.includes('\n')) {
               return <CodeBlock language={language} value={value} />;
             }
 

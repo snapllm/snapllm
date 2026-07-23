@@ -4,7 +4,7 @@
  *
  * Provides HTTP endpoints for LLM inference, eliminating the need for
  * a separate Python backend. Models stay loaded in memory for
- * ultra-fast switching (<1ms).
+ * selection between models that are already resident.
  *
  * Endpoints:
  *   GET  /health                      - Server health check
@@ -27,7 +27,7 @@
  *   POST /api/v1/contexts/ingest      - Ingest context (pre-compute KV cache)
  *   GET  /api/v1/contexts             - List all contexts
  *   GET  /api/v1/contexts/:id         - Get context info
- *   POST /api/v1/contexts/:id/query   - Query using cached context (O(1))
+ *   POST /api/v1/contexts/:id/query   - Query using cached context
  *   DELETE /api/v1/contexts/:id       - Delete context
  *   POST /api/v1/contexts/:id/promote - Promote to hot tier
  *   POST /api/v1/contexts/:id/demote  - Demote to cold tier
@@ -50,6 +50,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <condition_variable>
+#include <exception>
 
 // Forward declarations
 namespace httplib {
@@ -70,7 +71,10 @@ struct ServerConfig {
     std::string workspace_root = "";         ///< Model workspace (default: ~/SnapLLM_Workspace)
     std::string default_models_path = "";    ///< Default models folder (default: ~/Models or C:\Models)
     std::string config_path = "";            ///< Config file path (auto-resolved if empty)
-    bool cors_enabled = true;                ///< Enable CORS for browser access
+    bool cors_enabled = true;                ///< Enable strict allowlisted CORS for browser access
+    std::string api_key = "";                ///< Runtime-only API key; never persisted or returned
+    std::vector<std::string> allowed_origins; ///< Exact additional browser origins
+    size_t max_payload_bytes = 32 * 1024 * 1024; ///< Maximum HTTP request body (32 MiB)
     int timeout_seconds = 600;               ///< Request timeout
     int max_concurrent_requests = 8;         ///< Max concurrent requests (capped to 2 for GPU inference)
     int max_models = 10;                     ///< UI default: max models allowed
@@ -84,7 +88,7 @@ struct ServerConfig {
  * @brief SnapLLM HTTP Server
  *
  * Provides OpenAI-compatible REST API for LLM inference.
- * Models persist in memory across requests, enabling <1ms model switching.
+ * Models can persist in memory across requests to avoid unnecessary reloads.
  *
  * Usage:
  *   ServerConfig config;
@@ -187,6 +191,8 @@ private:
     // Route setup
     void setup_routes();
     void setup_middleware();
+    bool authorize_request(const httplib::Request& req, httplib::Response& res,
+                           bool require_authentication);
     bool dispatch_post(const httplib::Request& req, httplib::Response& res);
 
     // === Endpoint Handlers ===
@@ -259,6 +265,8 @@ private:
      */
     void send_error(httplib::Response& res, const std::string& message,
                     const std::string& error_type = "invalid_request_error", int status = 400);
+    void send_internal_error(httplib::Response& res, const char* operation,
+                             const std::exception& error);
 
     /**
      * @brief Generate unique completion ID

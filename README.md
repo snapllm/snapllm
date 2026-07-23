@@ -2,7 +2,7 @@
   <img src="logo_files/FULL_TRIMMED_transparent.png" alt="SnapLLM Logo" width="400"/>
 </p>
 
-<h1 align="center">High-Performance Multi-Model LLM Inference Engine with Sub-Millisecond Model Switching, </br> Switch models in a snap! with Desktop UI, CLI & API</h1>
+<h1 align="center">Local Multi-Model LLM Inference with Desktop UI, CLI & API</h1>
 
 <p align="center">
   <strong>Preprint Paper Link (https://doi.org/10.32388/7MLDM5)</strong></br>
@@ -46,26 +46,29 @@
 
 ## What is SnapLLM?
 
-SnapLLM is a LLM inference engine built on top of llama.cpp, stable-diffusion.cpp that enables **sub-millisecond model switching** between multiple loaded models. Unlike traditional approaches where switching models requires unloading and reloading (taking seconds to minutes), SnapLLM keeps multiple models hot in memory and switches between them in **<1ms**.
+SnapLLM is a local inference engine built on llama.cpp and
+stable-diffusion.cpp. It can keep multiple models loaded and select an
+already-resident model without reloading its weights. Actual load, switch, and
+generation latency depends on model size, hardware, memory pressure, and build
+configuration; benchmark your own workload before setting latency targets.
 
 ### The Problem
 
-Traditional LLM inference:
+One common single-resident-model workflow:
 ```
-Load Model A: 30-60 seconds
+Load Model A
 Use Model A
-Unload Model A: 5-10 seconds
-Load Model B: 30-60 seconds  <- Painful wait!
+Unload Model A
+Load Model B
 Use Model B
 ```
 
 ### The SnapLLM Solution
 
 ```
-Load Model A: 30 seconds (one-time)
-Load Model B: 30 seconds (one-time)
-Switch A -> B: 0.02ms  <- Instant!
-Switch B -> A: 0.02ms  <- Instant!
+Load Model A
+Load Model B
+Select A or B without an avoidable reload while both remain resident
 ```
 
 ---
@@ -76,13 +79,13 @@ Switch B -> A: 0.02ms  <- Instant!
 
 | Feature | Description |
 |---------|-------------|
-| **Fast <1ms Model Switching** | Switch between loaded models instantly using vPID architecture |
-| **Fast Reload After Eviction** | mmap + OS page cache reduces reload of evicted models from seconds to ~300ms |
+| **Resident Model Selection** | Select between loaded models without reloading their weights |
+| **Reload After Eviction** | Memory mapping can benefit from the operating-system page cache |
 | **Multi-Model Management** | Load and manage multiple models simultaneously |
 | **GPU/CPU Hybrid** | Automatic layer distribution based on available VRAM |
 | **OpenAI-Compatible API** | Drop-in replacement for OpenAI API |
 | **Multi-Modal Support** | LLM, Vision (VLM), and Stable Diffusion models |
-| **KV Cache Persistence** | vPID L2 context caching for O(1) query complexity |
+| **KV Cache Persistence** | Persist context state and use indexed cache lookup; generation work still depends on query and context size |
 | **Bundled Web UI** | Built-in React dashboard served at `localhost:6930` with auto browser launch |
 | **Desktop Application** | Beautiful React-based UI for model management |
 
@@ -92,33 +95,12 @@ Switch B -> A: 0.02ms  <- Instant!
 - **Vision Models**: Gemma 3 Vision, Qwen-VL, LLaVA (with mmproj files)
 - **Diffusion Models**: Stable Diffusion 1.5, SDXL, SD3, FLUX (via stable-diffusion.cpp)
 
-### Performance Benchmarks
+### Performance
 
-| Metric | Value |
-|--------|-------|
-| Model Switch Time | **0.02ms** |
-| First Token Latency | ~50ms |
-| Token Generation | 30-100+ tok/s (GPU dependent) |
-| Memory Efficiency | Shared KV cache across contexts |
-
-#### Text LLM Performance (RTX 4060 Laptop GPU)
-
-| Model | Size | Quantization | Speed |
-|-------|------|--------------|-------|
-| Medicine-LLM | 8B | Q8_0 | 44 tok/s |
-| Gemma 3 | 4B | Q5_K_M | 55 tok/s |
-| Qwen 3 | 8B | Q8_0 | 58 tok/s |
-| Llama 3 | 8B | Q4_K_M | 45 tok/s |
-
-#### Multi-Model Switching Performance
-
-| Operation | Time |
-|-----------|------|
-| First model load | 2-5s (GGUF → GPU) |
-| Reload after eviction | ~300-500ms (mmap page cache hit) |
-| Subsequent loads | <100ms (cached) |
-| Model switch (in VRAM) | **<1ms** |
-| Rapid switching (3 models) | <3ms total |
+SnapLLM reports operation timing at runtime where available. Published
+end-to-end latency guarantees require a reproducible benchmark that records the
+model, quantization, prompt, build flags, hardware, cache state, and sampling
+configuration. No such guarantee is made by this README.
 
 ---
 
@@ -155,7 +137,7 @@ build_cpu.bat
 
 ```bash
 chmod +x build.sh
-./build.sh --cuda
+./build.sh gpu
 ```
 
 ### Verify Installation
@@ -200,12 +182,31 @@ chmod +x start_server.sh
 ./start_server.sh
 ```
 
+### Docker
+
+The Compose service binds inside its container on `0.0.0.0`, publishes only to
+host loopback, and requires a runtime API key:
+
+```bash
+mkdir -p workspace models
+export SNAPLLM_API_KEY='replace-with-a-random-value-at-least-32-characters'
+docker compose up --build
+```
+
+The container runs as an unprivileged user with a read-only root filesystem,
+dropped Linux capabilities, a read-only model mount, and a writable workspace
+mount. Changing the host port mapping to a public interface is a deployment
+decision: keep the API key enabled and put TLS plus network access controls in
+front of SnapLLM.
+
 ### Optional launch overrides (scripts)
 
 - `SNAPLLM_SERVER_EXE`: Full path to the SnapLLM binary
 - `SNAPLLM_HOST`: Host bind address (default `127.0.0.1`)
 - `SNAPLLM_PORT`: Server port (default `6930`)
 - `SNAPLLM_WORKSPACE_ROOT`: Workspace root directory
+- `SNAPLLM_API_KEY`: Runtime-only API key; required when binding beyond loopback
+- `SNAPLLM_CORS_ORIGINS`: Comma-separated exact browser origins to allow
 
 ---
 
@@ -241,10 +242,10 @@ curl -X POST http://localhost:6930/api/v1/models/load \
   }'
 ```
 
-### 3. Switch Between Models Instantly
+### 3. Select a Loaded Model
 
 ```bash
-# Switch to gemma (takes ~0.02ms!)
+# Select gemma without reloading it if it is still resident
 curl -X POST http://localhost:6930/api/v1/models/switch \
   -H "Content-Type: application/json" \
   -d '{"model_id": "gemma"}'
@@ -288,6 +289,18 @@ npm run dev
 http://localhost:6930
 ```
 
+The default loopback listener can be used without an API key. For any
+non-loopback bind, set `SNAPLLM_API_KEY` to 32–4096 visible ASCII characters
+before starting the process. Send that value as either
+`Authorization: Bearer <key>` or `X-API-Key: <key>`. The key is read from the
+environment only and is not persisted or returned by the API.
+
+All requests are checked against the configured Host. Browser requests also
+use an exact Origin allowlist; add trusted origins with repeatable
+`--cors-origin` options or `SNAPLLM_CORS_ORIGINS`. Wildcards and reflected
+origins are not accepted. Model and workspace paths are canonicalized and must
+remain inside their configured roots.
+
 ### Endpoints Overview
 
 #### Health & Status
@@ -304,7 +317,7 @@ http://localhost:6930
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/v1/models/load` | Load a model |
-| POST | `/api/v1/models/switch` | Switch active model (<1ms) |
+| POST | `/api/v1/models/switch` | Select an already-loaded model |
 | POST | `/api/v1/models/unload` | Unload a model |
 | DELETE | `/api/v1/models/{id}` | Delete a model |
 | POST | `/api/v1/models/scan` | Scan folder for models |
@@ -335,7 +348,7 @@ http://localhost:6930
 |--------|----------|-------------|
 | POST | `/api/v1/contexts/ingest` | Pre-compute KV cache |
 | GET | `/api/v1/contexts` | List contexts |
-| POST | `/api/v1/contexts/{id}/query` | Query with O(1) lookup |
+| POST | `/api/v1/contexts/{id}/query` | Query with indexed cache lookup |
 | DELETE | `/api/v1/contexts/{id}` | Delete context |
 
 ### Detailed API Examples
@@ -514,7 +527,8 @@ Response:
 
 ### vPID (Virtual Processing-In-Disk) System
 
-SnapLLM uses a vPID architecture that enables instant model switching:
+SnapLLM uses a vPID architecture to select already-loaded models without an
+avoidable weight reload:
 
 ```
 +--------------------------------------------------------------------+
@@ -547,16 +561,16 @@ Client -> HTTP API -> Router -> Model Manager -> Active Model -> Response
 
 | Level | Name | Purpose |
 |-------|------|---------|
-| **L1** | Model Cache | Pre-dequantized tensors on disk, fast reload |
-| **L2** | Context Cache | KV cache persistence, O(1) query complexity |
+| **L1** | Model Cache | Model workspace metadata and engine-managed cache data |
+| **L2** | Context Cache | KV cache persistence with hash-indexed lookup |
 
 ### Memory Tiers
 
-| Tier | Storage | Latency | Capacity |
-|------|---------|---------|----------|
-| **HOT** | GPU VRAM | ~1ms | 6-48GB |
-| **WARM** | CPU RAM | ~10ms | 16-128GB |
-| **COLD** | SSD | ~100ms | 1TB+ |
+| Tier | Storage | Relative access | Capacity constraint |
+|------|---------|-----------------|---------------------|
+| **HOT** | GPU VRAM | Highest | Available VRAM |
+| **WARM** | CPU RAM | Intermediate | Available system RAM |
+| **COLD** | SSD | Lowest | Available storage |
 
 ### Per-Model Workspace Structure
 
@@ -565,7 +579,7 @@ SnapLLM_Workspace/
 |-- index.json                          # Model registry
 |-- medicine-llm/
 |   `-- Q8_0/
-|       `-- workspace.bin               # Pre-dequantized tensors
+|       `-- workspace.bin               # Engine-managed workspace
 |-- legal-llama/
 |   `-- Q4_K_M/
 |       `-- workspace.bin
@@ -596,7 +610,7 @@ SnapLLM includes a beautiful, modern desktop application built with React and Vi
 - **Vision**: Multimodal image analysis
 - **Models**: Load, manage, and switch models
 - **A/B Compare**: Side-by-side model comparison
-- **Quick Switch**: <1ms model switching interface
+- **Quick Switch**: select an already-loaded model
 - **Contexts**: vPID L2 KV cache management
 - **Playground**: API testing interface
 - **Metrics**: Performance analytics
@@ -629,7 +643,7 @@ https://github.com/user-attachments/assets/d6d964f9-0883-407d-bb8a-d935501dbb9d
 
 ### 1. Multi-Domain Assistant
 
-Load specialized models for different domains and switch instantly:
+Load specialized models for different domains and select them as needed:
 
 ```python
 import requests
@@ -651,7 +665,7 @@ def ask(domain, question):
     })
     return response.json()["choices"][0]["message"]["content"]
 
-# Switch domains instantly (<1ms)
+# Select the loaded domain model
 print(ask("medical", "What are symptoms of flu?"))
 print(ask("legal", "What is intellectual property?"))
 print(ask("coding", "Write a Python fibonacci function"))
@@ -693,7 +707,7 @@ response = requests.post(f"{BASE_URL}/api/v1/contexts/ingest", json={
 })
 context_id = response.json()["context_id"]
 
-# Query with O(1) context lookup (instant!)
+# Query through the indexed context cache
 def query_handbook(question):
     response = requests.post(f"{BASE_URL}/api/v1/contexts/{context_id}/query", json={
         "query": question,
@@ -701,7 +715,7 @@ def query_handbook(question):
     })
     return response.json()["response"]
 
-# Queries are now instant because context is pre-computed
+# Reuse pre-computed context state; generation still performs model work
 print(query_handbook("What is the vacation policy?"))
 print(query_handbook("How do I submit expenses?"))
 ```
@@ -717,9 +731,9 @@ print(query_handbook("How do I submit expenses?"))
 
 Options:
   --port PORT              Server port (default: 6930)
-  --host HOST              Bind address (default: 0.0.0.0)
-  --cors                   Enable CORS
-  --workspace PATH         Workspace directory
+  --host HOST              Bind address (default: 127.0.0.1)
+  --cors-origin ORIGIN     Allow an exact browser origin (repeatable)
+  --workspace-root PATH    Workspace directory
   --ui-dir PATH            Web UI directory (auto-detected)
   --load-model NAME PATH   Pre-load a model
 ```
@@ -776,6 +790,8 @@ Options:
 | `SNAPLLM_HOME` | Workspace root directory | Platform default |
 | `SNAPLLM_MODELS_PATH` | Default models directory | Platform default |
 | `SNAPLLM_CONFIG_PATH` | Server config file path | Platform default |
+| `SNAPLLM_API_KEY` | Runtime-only API key (required off loopback) | Unset |
+| `SNAPLLM_CORS_ORIGINS` | Comma-separated exact browser origins | Unset |
 
 ---
 
@@ -873,6 +889,9 @@ Thank you to our amazing individual sponsors:
 ## License
 
 SnapLLM is released under the [MIT License](LICENSE).
+
+Security issues should be reported privately as described in
+[SECURITY.md](SECURITY.md).
 
 ```
 MIT License

@@ -359,8 +359,8 @@ export default function Dashboard() {
   const vpidCacheTiers = useMemo(() => {
     const totalMb = cacheMetrics.totalMemoryMb || (loadedModels.length * 500);
     return {
-      hot: { name: 'HOT (L1 RAM)', value: Math.round(totalMb * 0.15), color: '#ef4444', description: 'Active Tensors', access: '<0.1ms' },
-      warm: { name: 'WARM (L2 SSD)', value: Math.round(totalMb * 0.55), color: '#f59e0b', description: 'Pre-dequantized', access: '<1ms' },
+      hot: { name: 'HOT (L1 RAM)', value: Math.round(totalMb * 0.15), color: '#ef4444', description: 'Active Tensors', access: 'Resident' },
+      warm: { name: 'WARM (L2 SSD)', value: Math.round(totalMb * 0.55), color: '#f59e0b', description: 'Cached data', access: 'On demand' },
       cold: { name: 'COLD (L3 Disk)', value: Math.round(totalMb * 0.30), color: '#3b82f6', description: 'Original GGUF', access: '~10ms' },
     };
   }, [cacheMetrics.totalMemoryMb, loadedModels.length]);
@@ -504,7 +504,7 @@ export default function Dashboard() {
                   <span className="ml-2 text-xs font-bold text-orange-500 bg-orange-100 dark:bg-orange-900/30 px-2 py-0.5 rounded-full align-middle">(BETA)</span>
                 </h1>
                 <p className="text-gray-600 dark:text-gray-400 max-w-xl">
-                  Multi-model inference with vPID &lt;1ms switching.
+                  Multi-model inference with vPID-managed loaded-model switching.
                   {loadedModels.length > 0 && (
                     <span className="font-medium text-sky-600 dark:text-sky-400">
                       {' '}{loadedModels.length} model{loadedModels.length > 1 ? 's' : ''} loaded
@@ -589,7 +589,7 @@ export default function Dashboard() {
                     Make sure the API server is running on {apiBaseUrl}
                   </p>
                   <code className="block mt-2 text-xs bg-red-100 dark:bg-red-900/50 p-2 rounded-lg text-red-700 dark:text-red-300">
-                    python api-server/run.py --dev --port 6930
+                    snapllm --server --host 127.0.0.1 --port 6930 --cors-origin http://127.0.0.1:9780 --cors-origin http://localhost:9780
                   </code>
                 </div>
                 <button
@@ -611,7 +611,7 @@ export default function Dashboard() {
           iconColor="text-yellow-500"
           iconBg="bg-yellow-500/10"
           label="Model Switch"
-          value="<1ms"
+          value="Loaded"
           trend="vPID"
           trendUp={true}
           description="Ultra-fast switching"
@@ -667,7 +667,7 @@ export default function Dashboard() {
           iconBg="bg-pink-500/10"
           label="Server Status"
           value={health?.status === 'ok' ? 'Running' : 'Offline'}
-          trend={health?.version || 'v1.0.0'}
+          trend={health?.version || `v${__APP_VERSION__}`}
           trendUp={health?.status === 'ok'}
           description="API Server"
           tooltip={`Server: ${apiBaseUrl}`}
@@ -782,7 +782,7 @@ export default function Dashboard() {
           onToggle={() => toggleSection('vpid')}
           onRefresh={refetchCacheStats}
           badge={<span className="px-2 py-0.5 bg-gradient-to-r from-yellow-500/20 to-orange-500/20 text-yellow-700 dark:text-yellow-400 text-xs font-medium rounded-full flex items-center gap-1 border border-yellow-500/30">
-            <Zap className="w-3 h-3" />&lt;1ms
+            <Zap className="w-3 h-3" />Loaded model
           </span>}
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">

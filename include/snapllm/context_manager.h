@@ -3,14 +3,14 @@
  * @brief Context Manager - vPID Level 2 Implementation
  *
  * SnapLLM Context Manager provides:
- * - KV cache persistence for O(1) query access
+ * - KV cache persistence with hash-indexed lookup
  * - Multi-tier storage (GPU → CPU → SSD)
  * - Automatic tiering based on access patterns
  * - Parallel to ModelManager (L1), extends vPID architecture
  *
  * Key Innovation:
  * - Pre-compute KV cache at ingestion time (O(n²))
- * - Query uses cached KV (O(1) lookup + O(q²) for query)
+ * - Query reuses cached KV state; generation remains workload-dependent
  * - Same vPID philosophy: "Don't recompute what's already computed"
  */
 
@@ -32,12 +32,107 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <mutex>
+#include <stdexcept>
+#include <thread>
+#include <type_traits>
+#include <utility>
 
 namespace snapllm {
 
 // Forward declarations
 class VPIDBridge;
 class ModelManager;
+
+namespace context_detail {
+
+/**
+ * @brief Owns background threads and joins them before destruction.
+ *
+ * Tasks may capture their owning object only when that object explicitly calls
+ * shutdown() before destroying state used by the tasks.
+ */
+class BackgroundTaskGroup {
+public:
+    BackgroundTaskGroup() = default;
+    ~BackgroundTaskGroup() { shutdown(); }
+
+    BackgroundTaskGroup(const BackgroundTaskGroup&) = delete;
+    BackgroundTaskGroup& operator=(const BackgroundTaskGroup&) = delete;
+
+    template <typename Function>
+    auto submit(Function&& function)
+        -> std::future<typename std::invoke_result_t<std::decay_t<Function>>> {
+        using Result = typename std::invoke_result_t<std::decay_t<Function>>;
+
+        auto task = std::make_shared<std::packaged_task<Result()>>(
+            std::forward<Function>(function));
+        auto future = task->get_future();
+        auto finished = std::make_shared<std::atomic<bool>>(false);
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!accepting_) {
+            throw std::runtime_error("background task group is shutting down");
+        }
+        reap_finished_locked();
+        Worker worker{
+            std::thread([task, finished]() {
+                (*task)();
+                finished->store(true, std::memory_order_release);
+            }),
+            std::move(finished)
+        };
+        try {
+            workers_.push_back(std::move(worker));
+        } catch (...) {
+            if (worker.thread.joinable()) {
+                worker.thread.join();
+            }
+            throw;
+        }
+        return future;
+    }
+
+    void shutdown() noexcept {
+        std::vector<Worker> workers;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            accepting_ = false;
+            workers.swap(workers_);
+        }
+        for (auto& worker : workers) {
+            if (worker.thread.joinable()) {
+                worker.thread.join();
+            }
+        }
+    }
+
+private:
+    struct Worker {
+        std::thread thread;
+        std::shared_ptr<std::atomic<bool>> finished;
+    };
+
+    void reap_finished_locked() {
+        auto worker = workers_.begin();
+        while (worker != workers_.end()) {
+            if (!worker->finished->load(std::memory_order_acquire)) {
+                ++worker;
+                continue;
+            }
+            if (worker->thread.joinable()) {
+                worker->thread.join();
+            }
+            worker = workers_.erase(worker);
+        }
+    }
+
+    std::mutex mutex_;
+    std::vector<Worker> workers_;
+    bool accepting_ = true;
+};
+
+} // namespace context_detail
 
 //=============================================================================
 // Context Specification
@@ -146,8 +241,19 @@ struct ContextQueryConfig {
  * @brief Result from a context query
  */
 struct ContextQueryResult {
+    enum class Status {
+        Success,
+        ContextNotFound,
+        ContextUnavailable,
+        CacheInjectionFailed,
+        BackendUnavailable,
+        Unsupported
+    };
+
     std::string text;
     std::vector<int> tokens;
+    Status status = Status::Success;
+    std::string error_message;
 
     struct Usage {
         uint32_t context_tokens = 0;    ///< Tokens from cached context
@@ -157,6 +263,8 @@ struct ContextQueryResult {
 
     double latency_ms = 0.0;
     bool cache_hit = false;
+
+    bool ok() const { return status == Status::Success; }
 };
 
 //=============================================================================
@@ -167,7 +275,11 @@ struct ContextQueryResult {
  * @brief Context Manager - vPID Level 2
  *
  * Manages the lifecycle of pre-computed KV caches for contexts.
- * Parallel to ModelManager (L1), provides O(1) context access.
+ * Parallel to ModelManager (L1), provides indexed context access.
+ *
+ * Thread safety: public methods are safe to call concurrently, except that the
+ * destructor requires external exclusion from new calls. Streaming callbacks
+ * must not re-enter query operations on the same manager.
  *
  * Usage:
  * @code
@@ -177,7 +289,7 @@ struct ContextQueryResult {
  * ContextSpec spec{"The quick brown fox...", "medicine"};
  * auto ctx_id = ctx_mgr.ingest_sync(spec);
  *
- * // Query using cached KV (fast, O(1) + O(q²))
+ * // Query using cached KV; only the hash lookup is expected O(1).
  * auto result = ctx_mgr.query(ctx_id, "What color is the fox?", config);
  * @endcode
  */
@@ -262,7 +374,7 @@ public:
     //=========================================================================
 
     /**
-     * @brief Query using cached context (O(1) context lookup)
+     * @brief Query using a hash-indexed cached context
      * @param handle Context handle
      * @param query Query text
      * @param config Query configuration
@@ -308,11 +420,13 @@ public:
     //=========================================================================
 
     /**
-     * @brief Get KV cache view for a context
+     * @brief Get an owning KV cache snapshot for a context
      * @param handle Context handle
-     * @return KV cache view, or empty view if not found
+     * @return Shared immutable cache, or nullptr if not found
+     *
+     * The returned cache remains alive across unload/remove operations.
      */
-    KVCacheView get_kv_cache(const ContextHandle& handle);
+    std::shared_ptr<const KVCache> get_kv_cache(const ContextHandle& handle);
 
     /**
      * @brief Get context metadata
@@ -492,7 +606,7 @@ private:
     // Internal context entry
     struct ContextEntry {
         ContextHandle handle;
-        std::unique_ptr<KVCache> kv_cache;
+        std::shared_ptr<KVCache> kv_cache;
         ContextMetadata metadata;
         std::string tier;
         bool dirty = false;  // Needs sync to disk
@@ -509,6 +623,12 @@ private:
 
     // Persistent KV cache extractor for injection (avoids double-free issues)
     mutable std::unique_ptr<KVCacheExtractor> kv_extractor_;
+    // KVCacheExtractor owns injected llama contexts, so injection and generation
+    // form one serialized lifetime scope.
+    mutable std::mutex inference_mutex_;
+
+    // Joined before any manager-owned state is destroyed.
+    context_detail::BackgroundTaskGroup background_tasks_;
 
     // Context storage
     mutable std::shared_mutex mutex_;
@@ -536,7 +656,10 @@ private:
     bool save_to_disk(const ContextEntry& entry);
     bool load_from_disk(const std::string& context_id, ContextEntry& entry);
     void restore_persisted_contexts();
-    void update_access(const std::string& context_id);
+    // Requires exclusive mutex_ ownership.
+    void update_access_locked(const std::string& context_id);
+    void record_cache_miss();
+    void record_query_success(double latency_ms);
     void check_tiering();
 };
 

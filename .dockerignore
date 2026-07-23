@@ -1,6 +1,16 @@
 .git
 .github
 .gitmodules
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+**/credentials.json
+**/secrets.json
 
 bin
 build

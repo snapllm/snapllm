@@ -14,7 +14,13 @@ import { CommandPalette } from '../CommandPalette';
 import type { Model, ModelType } from '../../types';
 
 export const Layout: React.FC = () => {
-  const { theme, sidebarCollapsed, commandPaletteOpen, setCommandPaletteOpen } = useAppStore();
+  const {
+    theme,
+    sidebarCollapsed,
+    commandPaletteOpen,
+    setCommandPaletteOpen,
+    setSidebarCollapsed,
+  } = useAppStore();
   const { setModels, setActiveModel } = useModelStore();
   const { setIsConnected } = useMetricsStore();
 
@@ -68,6 +74,16 @@ export const Layout: React.FC = () => {
   useEffect(() => {
     setIsConnected(!healthError && healthResponse?.status === 'ok');
   }, [healthResponse, healthError, setIsConnected]);
+
+  useEffect(() => {
+    const mobile = window.matchMedia('(max-width: 767px)');
+    const collapseForMobile = (event: MediaQueryListEvent | MediaQueryList) => {
+      if (event.matches) setSidebarCollapsed(true);
+    };
+    collapseForMobile(mobile);
+    mobile.addEventListener('change', collapseForMobile);
+    return () => mobile.removeEventListener('change', collapseForMobile);
+  }, [setSidebarCollapsed]);
 
   // Apply theme to document
   useEffect(() => {

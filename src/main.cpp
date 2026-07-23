@@ -7,6 +7,8 @@
 #include "snapllm/dequant_cache.h"
 #include "snapllm/model_manager.h"
 #include "snapllm/server.h"
+#include "snapllm/server_security.h"
+#include "snapllm/version.h"
 #include "snapllm/ison/ison_formatter.hpp"
 #include "nlohmann/json.hpp"
 #ifdef SNAPLLM_HAS_DIFFUSION
@@ -27,6 +29,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
+#include <sstream>
 
 using json = nlohmann::json;
 
@@ -196,7 +199,7 @@ void print_banner() {
     std::cout << BLUE << "  ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     " << ORANGE << "╚══════╝╚══════╝╚═╝     ╚═╝\n";
     std::cout << RESET << "\n";
     std::cout << "                    " << ORANGE << "* " << RESET << "Switch models in a snap!" << ORANGE << " *" << RESET << "\n";
-    std::cout << "                         v1.0.0\n";
+    std::cout << "                         v" << SNAPLLM_VERSION << "\n";
     std::cout << "                  Developed by AroorA AI Lab\n";
     std::cout << std::endl;
 }
@@ -231,6 +234,9 @@ void print_usage() {
     std::cout << "  --host HOST               Server host (default: 127.0.0.1)\n";
     std::cout << "  --port PORT               Server port (default: 6930)\n";
     std::cout << "  --ui-dir PATH             Web UI files directory (default: auto-detect)\n";
+    std::cout << "  SNAPLLM_API_KEY           API key environment variable (required off loopback)\n";
+    std::cout << "  SNAPLLM_NETWORK_GUARD       reverse-proxy or loopback-port-publish (required off loopback)\n";
+    std::cout << "  --cors-origin ORIGIN      Allow an exact browser origin (repeatable)\n";
 #ifdef SNAPLLM_HAS_DIFFUSION
     std::cout << "\nImage Generation Options:\n";
     std::cout << "  --load-diffusion NAME PATH  Load a diffusion model (SD/SDXL/FLUX)\n";
@@ -287,7 +293,7 @@ void run_multi_model_test(std::shared_ptr<ModelManager> manager,
     for (const auto& [model_name, prompt] : model_prompts) {
         std::cout << "------------------------------------------------------------\n";
         std::cout << "MODEL: " << model_name << "\n";
-        std::cout << "PROMPT: \"" << prompt << "\"\n";
+        std::cout << "PROMPT BYTES: " << prompt.size() << "\n";
         std::cout << "------------------------------------------------------------\n";
 
         // Time the model switch
@@ -320,7 +326,7 @@ void run_multi_model_test(std::shared_ptr<ModelManager> manager,
     std::cout << "============================================================\n";
     std::cout << "  BENCHMARK COMPLETE\n";
     std::cout << "============================================================\n";
-    std::cout << "All model switches completed in <1ms (vPID architecture)\n\n";
+    std::cout << "Model switch test completed; see measured timings above.\n\n";
 }
 
 // Check if launched by double-click (no console parent)
@@ -341,6 +347,10 @@ void wait_for_keypress() {
 }
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--version") {
+        std::cout << "SnapLLM " << SNAPLLM_VERSION << '\n';
+        return 0;
+    }
     print_banner();
 
     // If no arguments and launched interactively (double-click), show help and wait
@@ -399,6 +409,20 @@ int main(int argc, char** argv) {
     bool enable_gpu = true;
     std::string ui_dir = "";
     std::string config_path = get_default_config_path();
+    std::string server_api_key;
+    std::vector<std::string> allowed_origins;
+    if (const char* env_api_key = std::getenv("SNAPLLM_API_KEY")) {
+        server_api_key = env_api_key;
+    }
+    if (const char* env_origins = std::getenv("SNAPLLM_CORS_ORIGINS")) {
+        std::stringstream origins_stream(env_origins);
+        std::string origin;
+        while (std::getline(origins_stream, origin, ',')) {
+            if (!origin.empty()) {
+                allowed_origins.push_back(origin);
+            }
+        }
+    }
 
     // Load persisted configuration defaults (CLI args override these)
     json persisted_config;
@@ -578,6 +602,9 @@ int main(int argc, char** argv) {
         else if (arg == "--ui-dir" && i + 1 < argc) {
             ui_dir = argv[++i];
         }
+        else if (arg == "--cors-origin" && i + 1 < argc) {
+            allowed_origins.push_back(argv[++i]);
+        }
 #ifdef SNAPLLM_HAS_DIFFUSION
         else if (arg == "--load-diffusion" && i + 2 < argc) {
             std::string name = argv[++i];
@@ -657,13 +684,14 @@ int main(int argc, char** argv) {
     std::cout << "Per-model workspaces will be created automatically at:\n";
     std::cout << "  <workspace_root>/<model_name>/<quant_type>/workspace.bin\n\n";
 
-    // Create model manager with workspace root
-    auto manager = std::make_shared<ModelManager>(workspace_root);
-
-    // Enable validation if requested
-    if (enable_validation) {
-        std::cout << "\n=== Enabling Tensor Validation ===" << std::endl;
-        manager->enable_validation(true);
+    // Server mode constructs its single owning manager inside SnapLLMServer.
+    std::shared_ptr<ModelManager> manager;
+    if (!server_mode) {
+        manager = std::make_shared<ModelManager>(workspace_root);
+        if (enable_validation) {
+            std::cout << "\n=== Enabling Tensor Validation ===" << std::endl;
+            manager->enable_validation(true);
+        }
     }
 
     // Create GPU config from CLI args
@@ -682,16 +710,18 @@ int main(int argc, char** argv) {
     std::cout << "[GPU Config] Layers: " << (gpu_layers < 0 ? "auto" : std::to_string(gpu_layers))
               << ", VRAM budget: " << (vram_budget == 0 ? "auto" : std::to_string(vram_budget) + " MB") << "\n";
 
-    // Load all requested models
-    for (const auto& [name, path] : models_to_load) {
-        std::cout << "\n=== Loading Model: " << name << " ===\n";
-        std::cout << "Path: " << path << "\n\n";
+    // Server mode owns its own manager and loads models exactly once below.
+    if (!server_mode) {
+        for (const auto& [name, path] : models_to_load) {
+            std::cout << "\n=== Loading Model: " << name << " ===\n";
+            std::cout << "Path: " << path << "\n\n";
 
-        if (manager->load_model(name, path, false, DomainType::General, cli_gpu_config)) {
-            std::cout << "Model '" << name << "' loaded successfully!\n";
-        } else {
-            std::cerr << "Failed to load model: " << name << "\n";
-            return 1;
+            if (manager->load_model(name, path, false, DomainType::General, cli_gpu_config)) {
+                std::cout << "Model '" << name << "' loaded successfully!\n";
+            } else {
+                std::cerr << "Failed to load model: " << name << "\n";
+                return 1;
+            }
         }
     }
 
@@ -738,21 +768,26 @@ int main(int argc, char** argv) {
         config.enable_gpu = enable_gpu;
         config.config_path = config_path;
         config.ui_dir = ui_dir;
+        config.api_key = server_api_key;
+        config.allowed_origins = allowed_origins;
 
-        SnapLLMServer server(config);
+        std::unique_ptr<SnapLLMServer> server;
+        try {
+            server = std::make_unique<SnapLLMServer>(config);
+        } catch (const std::exception& e) {
+            std::cerr << "[Server] Configuration rejected: " << e.what() << "\n";
+            return 1;
+        }
 
-        // Transfer models from CLI manager to server's manager
-        auto server_manager = server.get_model_manager();
+        auto server_manager = server->get_model_manager();
         for (const auto& [name, path] : models_to_load) {
-            // Models are already loaded in 'manager', but server has its own manager
-            // Re-load into server's manager (uses cached workspace data, so fast)
             if (!server_manager->load_model(name, path, false, DomainType::General, cli_gpu_config)) {
                 std::cerr << "[Server] Warning: Could not load model '" << name << "'\n";
             }
         }
 
         // Start server (blocking call)
-        if (!server.start()) {
+        if (!server->start()) {
             std::cerr << "[Server] Failed to start HTTP server\n";
             return 1;
         }
@@ -811,7 +846,7 @@ int main(int argc, char** argv) {
         }
 
         std::cout << "Model: " << model_name << "\n";
-        std::cout << "Prompt: " << prompt_text << "\n\n";
+        std::cout << "Prompt bytes: " << prompt_text.size() << "\n\n";
 
         size_t actual_tokens = 0;
         auto start = std::chrono::high_resolution_clock::now();
@@ -949,12 +984,12 @@ int main(int argc, char** argv) {
 
         std::cout << "\n=== Image Generation ===\n";
         std::cout << "Model: " << model_name << "\n";
-        std::cout << "Prompt: " << image_prompt << "\n";
+        std::cout << "Prompt bytes: " << image_prompt.size() << "\n";
         std::cout << "Size: " << img_width << "x" << img_height << "\n";
         std::cout << "Steps: " << steps << "\n";
         std::cout << "CFG Scale: " << cfg_scale << "\n";
         if (!negative_prompt.empty()) {
-            std::cout << "Negative: " << negative_prompt << "\n";
+            std::cout << "Negative prompt bytes: " << negative_prompt.size() << "\n";
         }
         std::cout << "\nGenerating...\n";
 
@@ -1013,13 +1048,13 @@ int main(int argc, char** argv) {
 
         std::cout << "\n=== Video Generation ===\n";
         std::cout << "Model: " << model_name << "\n";
-        std::cout << "Prompt: " << video_prompt << "\n";
+        std::cout << "Prompt bytes: " << video_prompt.size() << "\n";
         std::cout << "Frames: " << num_frames << "\n";
         std::cout << "FPS: " << fps << "\n";
         std::cout << "Size: " << img_width << "x" << img_height << "\n";
         std::cout << "Steps: " << steps << "\n";
         if (!negative_prompt.empty()) {
-            std::cout << "Negative: " << negative_prompt << "\n";
+            std::cout << "Negative prompt bytes: " << negative_prompt.size() << "\n";
         }
         std::cout << "\nGenerating video...\n";
 
@@ -1098,7 +1133,7 @@ int main(int argc, char** argv) {
         // Generate if we have a prompt
         if (!vision_prompt.empty()) {
             std::cout << "\n=== Multimodal Generation ===\n";
-            std::cout << "Prompt: " << vision_prompt << "\n";
+            std::cout << "Prompt bytes: " << vision_prompt.size() << "\n";
 
             // Load images
             std::vector<ImageInput> images;

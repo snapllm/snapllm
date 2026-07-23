@@ -2,14 +2,14 @@
  * @file context_manager.cpp
  * @brief Context Manager Implementation - vPID Level 2
  *
- * SnapLLM Context Manager - KV Cache Persistence for O(1) Query Access
+ * SnapLLM Context Manager - KV Cache Persistence and Indexed Lookup
  *
  * This module implements the L2 layer of vPID architecture, extending
  * the model persistence (L1) to include context-level KV cache persistence.
  *
  * Key Innovation:
  * - Pre-compute KV cache at document ingestion time (O(n²))
- * - Query uses cached KV (O(1) lookup + O(q²) for query tokens only)
+ * - Query uses a hash-indexed cached KV entry plus model generation work
  * - Same vPID philosophy: "Don't recompute what's already computed"
  */
 
@@ -18,16 +18,49 @@
 #include "snapllm/kv_cache_extractor.h"
 #include "snapllm/tiered_memory_allocator.h"
 #include "llama.h"  // For llama_free
+#include "nlohmann/json.hpp"
+extern "C" {
+#include "sha256.h"
+}
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <cctype>
 #include <random>
 #include <cstring>
 #include <mutex>
+#include <cerrno>
+#include <cstdio>
+#include <limits>
+#include <stdexcept>
+#include <system_error>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace snapllm {
+
+namespace {
+
+class ContextCacheReset {
+public:
+    ContextCacheReset(KVCacheExtractor& extractor, std::string model_name)
+        : extractor_(extractor), model_name_(std::move(model_name)) {}
+    ~ContextCacheReset() noexcept {
+        extractor_.clear_context_cache(model_name_);
+    }
+
+    ContextCacheReset(const ContextCacheReset&) = delete;
+    ContextCacheReset& operator=(const ContextCacheReset&) = delete;
+
+private:
+    KVCacheExtractor& extractor_;
+    std::string model_name_;
+};
+
+} // anonymous namespace
 
 //=============================================================================
 // Utility Functions
@@ -52,23 +85,73 @@ std::string generate_context_id() {
     return ss.str();
 }
 
-/**
- * @brief Compute CRC32 checksum
- */
 uint32_t compute_checksum(const void* data, size_t size) {
-    // Simple CRC32 implementation
-    const uint8_t* bytes = static_cast<const uint8_t*>(data);
-    uint32_t crc = 0xFFFFFFFF;
-
-    for (size_t i = 0; i < size; ++i) {
-        crc ^= bytes[i];
-        for (int j = 0; j < 8; ++j) {
-            crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
-        }
-    }
-
-    return ~crc;
+    return kv_cache_detail::compute_checksum(data, size);
 }
+
+namespace {
+
+constexpr uintmax_t kMaximumContextMetadataBytes = 64 * 1024;
+constexpr uintmax_t kMaximumAggregateContextMetadataBytes = 64 * 1024 * 1024;
+constexpr size_t kMaximumPersistedContexts = 10000;
+
+bool is_safe_metadata_identifier(const std::string& value) {
+    if (value.empty() || value.size() > 255) return false;
+    return std::all_of(value.begin(), value.end(), [](unsigned char character) {
+        return std::isalnum(character) || character == '_' ||
+               character == '-' || character == '.';
+    });
+}
+
+fs::path temporary_cache_path(const fs::path& destination) {
+    std::random_device random;
+    std::ostringstream suffix;
+    suffix << ".tmp." << std::hex << random() << random();
+    fs::path temporary = destination;
+    temporary += suffix.str();
+    return temporary;
+}
+
+bool replace_file_atomically(
+    const fs::path& temporary,
+    const fs::path& destination,
+    std::error_code& error
+) {
+#ifdef _WIN32
+    if (::MoveFileExW(
+            temporary.c_str(),
+            destination.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        return true;
+    }
+    error = std::error_code(static_cast<int>(::GetLastError()), std::system_category());
+    return false;
+#else
+    if (std::rename(temporary.c_str(), destination.c_str()) == 0) {
+        return true;
+    }
+    error = std::error_code(errno, std::generic_category());
+    return false;
+#endif
+}
+
+bool write_exact(std::ofstream& file, const void* data, size_t size) {
+    if (size > static_cast<size_t>((std::numeric_limits<std::streamsize>::max)())) {
+        return false;
+    }
+    file.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+    return static_cast<bool>(file);
+}
+
+bool read_exact(std::ifstream& file, void* data, size_t size) {
+    if (size > static_cast<size_t>((std::numeric_limits<std::streamsize>::max)())) {
+        return false;
+    }
+    file.read(static_cast<char*>(data), static_cast<std::streamsize>(size));
+    return file.gcount() == static_cast<std::streamsize>(size) && !file.bad();
+}
+
+} // namespace
 
 //=============================================================================
 // ContextManager Implementation
@@ -123,6 +206,9 @@ ContextManager::ContextManager(
 ContextManager::~ContextManager() {
     std::cout << "[SnapLLM] ContextManager shutting down" << std::endl;
 
+    // No manager-owned task may observe partially destroyed state.
+    background_tasks_.shutdown();
+
     // Save all dirty contexts to disk
     std::unique_lock<std::shared_mutex> lock(mutex_);
     for (auto& [id, entry] : contexts_) {
@@ -151,7 +237,7 @@ ContextHandle ContextManager::generate_handle() {
 }
 
 std::future<ContextHandle> ContextManager::ingest_async(const ContextSpec& spec) {
-    return std::async(std::launch::async, [this, spec]() {
+    return background_tasks_.submit([this, spec]() {
         return ingest_sync(spec);
     });
 }
@@ -182,7 +268,7 @@ ContextHandle ContextManager::ingest_sync(const ContextSpec& spec) {
     // Create context entry
     ContextEntry entry;
     entry.handle = handle;
-    entry.kv_cache = std::make_unique<KVCache>(std::move(kv_cache));
+    entry.kv_cache = std::make_shared<KVCache>(std::move(kv_cache));
     entry.tier = "hot";  // Start in hot tier
     entry.dirty = true;
 
@@ -215,6 +301,10 @@ ContextHandle ContextManager::ingest_sync(const ContextSpec& spec) {
     std::cout << "[SnapLLM] KV cache size: "
               << (entry.kv_cache->memory_bytes() / (1024 * 1024)) << " MB" << std::endl;
 
+    // Persist before publishing the entry. This avoids detached work and keeps
+    // blocking filesystem I/O outside the contexts lock.
+    entry.dirty = !save_to_disk(entry);
+
     // Store in map
     {
         std::unique_lock<std::shared_mutex> lock(mutex_);
@@ -231,15 +321,6 @@ ContextHandle ContextManager::ingest_sync(const ContextSpec& spec) {
         }
     }
 
-    // Save to disk asynchronously (background task)
-    std::thread([this, id = handle.id]() {
-        std::shared_lock<std::shared_mutex> lock(mutex_);
-        auto it = contexts_.find(id);
-        if (it != contexts_.end()) {
-            save_to_disk(it->second);
-        }
-    }).detach();
-
     return handle;
 }
 
@@ -253,12 +334,15 @@ bool ContextManager::unload(const ContextHandle& handle) {
 
     // Save to disk if dirty
     if (it->second.dirty) {
-        save_to_disk(it->second);
+        if (!save_to_disk(it->second)) {
+            return false;
+        }
     }
 
     // Update stats
     size_t mem = it->second.kv_cache ? it->second.kv_cache->memory_bytes() : 0;
-    stats_.total_memory_bytes -= mem;
+    stats_.total_memory_bytes =
+        stats_.total_memory_bytes > mem ? stats_.total_memory_bytes - mem : 0;
 
     if (it->second.tier == "hot") {
         stats_.hot_contexts--;
@@ -267,10 +351,13 @@ bool ContextManager::unload(const ContextHandle& handle) {
         stats_.warm_contexts--;
         stats_.warm_memory_bytes -= mem;
     }
+    stats_.cold_contexts++;
+    stats_.cold_memory_bytes += it->second.metadata.storage_size_bytes;
 
     // Clear KV cache from memory (keep metadata)
     it->second.kv_cache.reset();
     it->second.tier = "cold";
+    it->second.metadata.tier = "cold";
     it->second.metadata.status = ResourceStatus::Evicted;
 
     std::cout << "[SnapLLM] Context '" << handle.id << "' unloaded from memory" << std::endl;
@@ -286,9 +373,25 @@ bool ContextManager::remove(const ContextHandle& handle) {
         return false;
     }
 
-    // Update stats
+    // Delete persisted state before publishing the in-memory removal.
+    std::error_code ec;
+    for (const auto& tier : {"hot", "warm", "cold"}) {
+        auto path = paths_.get_context_cache_path(handle.id, tier);
+        const bool exists = fs::exists(path, ec);
+        if (ec || (exists && !fs::remove(path, ec)) || ec) {
+            return false;
+        }
+    }
+    auto meta_path = paths_.get_context_metadata_path(handle.id);
+    const bool metadata_exists = fs::exists(meta_path, ec);
+    if (ec || (metadata_exists && !fs::remove(meta_path, ec)) || ec) {
+        return false;
+    }
+
+    // Update stats only after filesystem deletion succeeds.
     size_t mem = it->second.kv_cache ? it->second.kv_cache->memory_bytes() : 0;
-    stats_.total_memory_bytes -= mem;
+    stats_.total_memory_bytes =
+        stats_.total_memory_bytes > mem ? stats_.total_memory_bytes - mem : 0;
     stats_.total_contexts--;
 
     if (it->second.tier == "hot") {
@@ -299,20 +402,9 @@ bool ContextManager::remove(const ContextHandle& handle) {
         stats_.warm_memory_bytes -= mem;
     } else {
         stats_.cold_contexts--;
-        stats_.cold_memory_bytes -= mem;
-    }
-
-    // Delete from disk
-    std::error_code ec;
-    for (const auto& tier : {"hot", "warm", "cold"}) {
-        auto path = paths_.get_context_cache_path(handle.id, tier);
-        if (fs::exists(path)) {
-            fs::remove(path, ec);
-        }
-    }
-    auto meta_path = paths_.get_context_metadata_path(handle.id);
-    if (fs::exists(meta_path)) {
-        fs::remove(meta_path, ec);
+        const size_t stored = it->second.metadata.storage_size_bytes;
+        stats_.cold_memory_bytes =
+            stats_.cold_memory_bytes > stored ? stats_.cold_memory_bytes - stored : 0;
     }
 
     // Remove from map
@@ -367,7 +459,19 @@ bool ContextManager::ensure_loaded(const ContextHandle& handle) {
         return false;
     }
 
+    const size_t loaded_bytes = it->second.kv_cache ? it->second.kv_cache->memory_bytes() : 0;
+    if (stats_.cold_contexts > 0) {
+        stats_.cold_contexts--;
+    }
+    stats_.cold_memory_bytes =
+        stats_.cold_memory_bytes > it->second.metadata.storage_size_bytes
+            ? stats_.cold_memory_bytes - it->second.metadata.storage_size_bytes
+            : 0;
+    stats_.warm_contexts++;
+    stats_.warm_memory_bytes += loaded_bytes;
+    stats_.total_memory_bytes += loaded_bytes;
     it->second.tier = "warm";  // Reloaded goes to warm tier
+    it->second.metadata.tier = "warm";
     it->second.metadata.status = ResourceStatus::Ready;
 
     std::cout << "[SnapLLM] Context '" << handle.id << "' reloaded from disk" << std::endl;
@@ -390,40 +494,44 @@ ContextQueryResult ContextManager::query(
     // Ensure context is loaded
     if (!ensure_loaded(handle)) {
         result.text = "Error: Context not found or could not be loaded";
-        stats_.cache_misses++;
+        result.status = ContextQueryResult::Status::ContextNotFound;
+        result.error_message = "context not found or could not be loaded";
+        record_cache_miss();
         return result;
     }
 
-    // Get context entry
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    auto it = contexts_.find(handle.id);
-    if (it == contexts_.end() || !it->second.kv_cache) {
-        result.text = "Error: Context not available";
-        stats_.cache_misses++;
-        return result;
-    }
-
-    // Update access tracking
-    update_access(handle.id);
-
-    // Get model for inference
-    const std::string& model_id = it->second.metadata.model_id;
-
-    // Get KV cache view and raw state
-    KVCacheView kv_view(it->second.kv_cache.get());
-
-    // Get the raw KV state for injection
-    // The state is stored in layers[0].keys for raw llama.cpp format
+    std::shared_ptr<const KVCache> cache;
+    std::string model_id;
     std::vector<uint8_t> kv_state;
-    if (!it->second.kv_cache->layers.empty()) {
-        kv_state = it->second.kv_cache->layers[0].keys;
-    }
+    uint32_t context_token_count = 0;
+    {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        auto it = contexts_.find(handle.id);
+        if (it == contexts_.end() || !it->second.kv_cache) {
+            result.text = "Error: Context not available";
+            result.status = ContextQueryResult::Status::ContextUnavailable;
+            result.error_message = "context cache is unavailable";
+            stats_.cache_misses++;
+            return result;
+        }
 
-    lock.unlock();  // Release lock during inference
+        update_access_locked(handle.id);
+        cache = it->second.kv_cache;
+        model_id = it->second.metadata.model_id;
+        context_token_count = cache->shape.sequence_length;
+        if (!cache->layers.empty()) {
+            kv_state = cache->layers[0].keys;
+        }
+    }
 
     std::cout << "[SnapLLM] Query with cached context '" << handle.id << "'" << std::endl;
-    std::cout << "[SnapLLM] Context tokens: " << kv_view.sequence_length()
-              << ", Query: \"" << query.substr(0, 50) << (query.size() > 50 ? "..." : "") << "\"" << std::endl;
+    std::cout << "[SnapLLM] Context tokens: " << context_token_count
+              << ", query bytes: " << query.size() << std::endl;
+
+    // KVCacheExtractor owns the injected llama context. Keep injection and
+    // generation in one serialized scope so another query cannot replace it.
+    std::lock_guard<std::mutex> inference_lock(inference_mutex_);
+    ContextCacheReset context_reset(*kv_extractor_, model_id);
 
     // Inject the pre-computed KV cache using persistent extractor
     KVInjectionResult inject_result;
@@ -433,34 +541,33 @@ ContextQueryResult ContextManager::query(
         if (!inject_result.success) {
             std::cerr << "[SnapLLM] KV injection failed: " << inject_result.error_message << std::endl;
             result.text = "Error: Failed to inject KV cache - " + inject_result.error_message;
+            result.status = ContextQueryResult::Status::CacheInjectionFailed;
+            result.error_message = inject_result.error_message;
             result.cache_hit = false;
-            stats_.cache_misses++;
+            record_cache_miss();
             return result;
         }
 
         std::cout << "[SnapLLM] KV cache injected in " << inject_result.inject_time_ms << "ms" << std::endl;
     }
 
-    // Generate text using the injected KV cache (vPID L2 O(1) context!)
+    // Generate text using the injected vPID L2 KV cache.
     result.cache_hit = true;
-    result.usage.context_tokens = kv_view.sequence_length();
+    result.usage.context_tokens = context_token_count;
 
     if (inject_result.ctx && model_manager_) {
         auto bridge = model_manager_->get_bridge();
         if (bridge) {
             // Use the new generate_with_injected_kv method
             // This skips context prefill and starts generating from after cached context
-            int context_token_count = static_cast<int>(kv_view.sequence_length());
-
             std::cout << "[SnapLLM] vPID L2 Generation: context=" << context_token_count
-                      << " tokens (skipped), query=\"" << query.substr(0, 40)
-                      << (query.size() > 40 ? "..." : "") << "\"" << std::endl;
+                      << " tokens (skipped), query_bytes=" << query.size() << std::endl;
 
             result.text = bridge->generate_with_injected_kv(
                 model_id,
                 inject_result.ctx,
                 query,
-                context_token_count,
+                static_cast<int>(context_token_count),
                 config.max_tokens,
                 config.temperature,
                 config.top_p,
@@ -474,9 +581,13 @@ ContextQueryResult ContextManager::query(
             // NOTE: Do NOT free inject_result.ctx - owned by KVCacheExtractor
         } else {
             result.text = "[Error: VPIDBridge not available]";
+            result.status = ContextQueryResult::Status::BackendUnavailable;
+            result.error_message = "VPIDBridge not available";
         }
     } else {
         result.text = "[Error: KV injection context not available]";
+        result.status = ContextQueryResult::Status::BackendUnavailable;
+        result.error_message = "KV injection context not available";
     }
 
     result.usage.query_tokens = static_cast<uint32_t>(query.size() / 4);  // Rough estimate
@@ -484,11 +595,12 @@ ContextQueryResult ContextManager::query(
     auto end = std::chrono::high_resolution_clock::now();
     result.latency_ms = std::chrono::duration<double, std::milli>(end - start).count();
 
-    // Update stats
-    stats_.queries_total++;
-    stats_.cache_hits++;
-    query_latency_sum_.fetch_add(static_cast<uint64_t>(result.latency_ms * 1000));
-    query_count_.fetch_add(1);
+    if (result.ok()) {
+        record_query_success(result.latency_ms);
+    } else {
+        result.cache_hit = false;
+        record_cache_miss();
+    }
 
     return result;
 }
@@ -502,47 +614,56 @@ size_t ContextManager::query_streaming(
     // Ensure context is loaded
     if (!ensure_loaded(handle)) {
         callback("Error: Context not found", -1, true);
+        record_cache_miss();
         return 0;
     }
 
-    // Get context entry
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    auto it = contexts_.find(handle.id);
-    if (it == contexts_.end() || !it->second.kv_cache) {
+    std::shared_ptr<const KVCache> cache;
+    std::string model_id;
+    std::vector<uint8_t> kv_state;
+    uint32_t context_token_count = 0;
+    bool context_unavailable = false;
+    {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        auto it = contexts_.find(handle.id);
+        if (it == contexts_.end() || !it->second.kv_cache) {
+            stats_.cache_misses++;
+            context_unavailable = true;
+        } else {
+            update_access_locked(handle.id);
+            cache = it->second.kv_cache;
+            model_id = it->second.metadata.model_id;
+            context_token_count = cache->shape.sequence_length;
+            if (!cache->layers.empty()) {
+                kv_state = cache->layers[0].keys;
+            }
+        }
+    }
+    if (context_unavailable) {
         callback("Error: Context not available", -1, true);
         return 0;
     }
 
-    update_access(handle.id);
-
-    const std::string& model_id = it->second.metadata.model_id;
-    KVCacheView kv_view(it->second.kv_cache.get());
-
-    // Get the raw KV state for injection
-    std::vector<uint8_t> kv_state;
-    if (!it->second.kv_cache->layers.empty()) {
-        kv_state = it->second.kv_cache->layers[0].keys;
-    }
-
-    lock.unlock();
-
     std::cout << "[SnapLLM] Streaming query with cached context '" << handle.id << "'" << std::endl;
-    std::cout << "[SnapLLM] Context tokens: " << kv_view.sequence_length() << std::endl;
+    std::cout << "[SnapLLM] Context tokens: " << context_token_count << std::endl;
 
     // If KV state is empty, we can't do cached streaming - signal caller to use regular path
     if (kv_state.empty()) {
         std::cout << "[SnapLLM] No KV cache data available, falling back to regular streaming" << std::endl;
         callback("", -1, true);  // Signal no cached generation available
-        stats_.cache_misses++;
+        record_cache_miss();
         return 0;
     }
+
+    std::lock_guard<std::mutex> inference_lock(inference_mutex_);
+    ContextCacheReset context_reset(*kv_extractor_, model_id);
 
     // Inject KV cache using persistent extractor (avoids double-free on function exit)
     KVInjectionResult inject_result = kv_extractor_->inject(model_id, kv_state, 0);
 
     if (!inject_result.success) {
         callback("Error: KV injection failed - " + inject_result.error_message, -1, true);
-        stats_.cache_misses++;
+        record_cache_miss();
         return 0;
     }
 
@@ -550,16 +671,15 @@ size_t ContextManager::query_streaming(
               << inject_result.inject_time_ms << "ms" << std::endl;
 
     // Get the bridge for streaming generation
-    auto bridge = model_manager_->get_bridge();
+    auto bridge = model_manager_ ? model_manager_->get_bridge() : nullptr;
     if (!bridge) {
         callback("Error: Could not get bridge for streaming", -1, true);
+        record_cache_miss();
         // NOTE: Do NOT free inject_result.ctx - owned by KVCacheExtractor
         return 0;
     }
 
     // Perform streaming generation with the injected KV cache
-    int context_token_count = static_cast<int>(kv_view.sequence_length());
-
     // Wrap our void callback to match VPIDBridge's bool callback signature
     auto bridge_callback = [&callback](const std::string& token, int token_id, bool is_eos) -> bool {
         callback(token, token_id, is_eos);
@@ -570,7 +690,7 @@ size_t ContextManager::query_streaming(
         model_id,
         inject_result.ctx,
         query,
-        context_token_count,
+        static_cast<int>(context_token_count),
         bridge_callback,
         static_cast<int>(config.max_tokens),
         config.temperature,
@@ -579,12 +699,9 @@ size_t ContextManager::query_streaming(
         config.repeat_penalty
     );
 
-    // NOTE: Do NOT free inject_result.ctx here!
-    // The context is owned and cached by KVCacheExtractor for reuse.
-    // KVCacheExtractor::~KVCacheExtractor() handles cleanup.
+    // The scoped cache reset frees the injected context after generation.
 
-    stats_.queries_total++;
-    stats_.cache_hits++;
+    record_query_success(0.0);
 
     return tokens_generated;
 }
@@ -610,9 +727,9 @@ ContextQueryResult ContextManager::query_multi(
     std::cout << "[SnapLLM] Multi-context query with " << handles.size() << " contexts" << std::endl;
 
     result.text = "[Placeholder: Multi-context RAG will be implemented in Phase 1.3]";
-    result.cache_hit = true;
-
-    stats_.queries_total++;
+    result.status = ContextQueryResult::Status::Unsupported;
+    result.error_message = "multi-context queries are not implemented";
+    result.cache_hit = false;
 
     return result;
 }
@@ -621,19 +738,19 @@ ContextQueryResult ContextManager::query_multi(
 // Access Operations
 //=============================================================================
 
-KVCacheView ContextManager::get_kv_cache(const ContextHandle& handle) {
+std::shared_ptr<const KVCache> ContextManager::get_kv_cache(const ContextHandle& handle) {
     if (!ensure_loaded(handle)) {
-        return KVCacheView();
+        return nullptr;
     }
 
-    std::shared_lock<std::shared_mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     auto it = contexts_.find(handle.id);
     if (it == contexts_.end() || !it->second.kv_cache) {
-        return KVCacheView();
+        return nullptr;
     }
 
-    update_access(handle.id);
-    return KVCacheView(it->second.kv_cache.get());
+    update_access_locked(handle.id);
+    return std::make_shared<const KVCache>(*it->second.kv_cache);
 }
 
 std::optional<ContextMetadata> ContextManager::get_metadata(const ContextHandle& handle) const {
@@ -726,7 +843,7 @@ bool ContextManager::promote(const ContextHandle& handle, const std::string& tar
         return false;
     }
 
-    const std::string& current_tier = it->second.tier;
+    std::string current_tier = it->second.tier;
 
     // Check valid promotion
     if (target_tier == "hot" && (current_tier == "warm" || current_tier == "cold")) {
@@ -738,6 +855,13 @@ bool ContextManager::promote(const ContextHandle& handle, const std::string& tar
             }
             lock.lock();
             it = contexts_.find(handle.id);
+            if (it == contexts_.end() || !it->second.kv_cache) {
+                return false;
+            }
+            current_tier = it->second.tier;
+            if (current_tier != "warm" && current_tier != "cold") {
+                return false;
+            }
         }
 
         // Use allocator for tier promotion if available
@@ -777,6 +901,16 @@ bool ContextManager::promote(const ContextHandle& handle, const std::string& tar
             }
             lock.lock();
             it = contexts_.find(handle.id);
+            if (it == contexts_.end() || !it->second.kv_cache) {
+                return false;
+            }
+            if (it->second.tier == "warm") {
+                return true;
+            }
+            if (it->second.tier != "cold") {
+                return false;
+            }
+            current_tier = it->second.tier;
         }
 
         // Use allocator for tier promotion if available
@@ -832,7 +966,9 @@ bool ContextManager::demote(const ContextHandle& handle, const std::string& targ
     if (target_tier == "cold" && (current_tier == "hot" || current_tier == "warm")) {
         // Save to disk and free memory
         if (it->second.dirty) {
-            save_to_disk(it->second);
+            if (!save_to_disk(it->second)) {
+                return false;
+            }
         }
 
         // Use allocator for tier demotion (to SSD = memory free)
@@ -907,11 +1043,13 @@ void ContextManager::set_tier_capacity(const std::string& tier, size_t bytes) {
 }
 
 void ContextManager::set_default_ttl(uint32_t seconds) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     default_ttl_seconds_ = seconds;
     std::cout << "[SnapLLM] Default TTL set to " << seconds << " seconds" << std::endl;
 }
 
 void ContextManager::set_auto_tiering(bool enabled) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     auto_tiering_enabled_ = enabled;
     std::cout << "[SnapLLM] Auto-tiering " << (enabled ? "enabled" : "disabled") << std::endl;
 }
@@ -925,6 +1063,7 @@ KVCache ContextManager::compute_kv_cache(
     const std::string& model_id,
     const KVCacheConfig& config
 ) {
+    (void)config;
     std::cout << "[SnapLLM] Computing KV cache (O(n²) operation)..." << std::endl;
 
     // Create KV cache extractor using ModelManager
@@ -934,18 +1073,8 @@ KVCache ContextManager::compute_kv_cache(
     if (!extractor.supports_extraction(model_id)) {
         std::cerr << "[SnapLLM] Model '" << model_id << "' does not support KV extraction" << std::endl;
         std::cerr << "[SnapLLM] Ensure the model is loaded in ModelManager" << std::endl;
-
-        // Return placeholder for testing without loaded model
-        KVCache cache;
-        cache.context_id = "";
-        cache.model_id = model_id;
-        cache.shape.num_layers = 32;
-        cache.shape.num_heads = 32;
-        cache.shape.head_dim = 128;
-        cache.shape.sequence_length = static_cast<uint32_t>(content.size() / 4);
-        cache.shape.dtype = config.dtype;
-        cache.allocate();
-        return cache;
+        throw std::runtime_error(
+            "KV extraction is unavailable for the requested model");
     }
 
     // Configure extraction
@@ -981,6 +1110,17 @@ bool ContextManager::save_to_disk(const ContextEntry& entry) {
     if (!entry.kv_cache) {
         return false;
     }
+    KVCacheFileHeader header;
+    std::memset(&header, 0, sizeof(header));
+    std::memcpy(header.magic, "SKVC", sizeof(header.magic));
+    header.version = kv_cache_detail::KVC_FORMAT_VERSION;
+    if (entry.handle.id.empty() ||
+        entry.handle.id.size() >= sizeof(header.context_id) ||
+        entry.metadata.model_id.empty() ||
+        entry.metadata.model_id.size() >= sizeof(header.model_id)) {
+        std::cerr << "[SnapLLM] Refusing to persist cache with invalid identifier length" << std::endl;
+        return false;
+    }
 
     // Determine path based on tier
     auto path = paths_.get_context_cache_path(entry.handle.id, entry.tier);
@@ -990,56 +1130,124 @@ bool ContextManager::save_to_disk(const ContextEntry& entry) {
     // Create directories if needed
     std::error_code ec;
     fs::create_directories(path.parent_path(), ec);
-
-    // Write file
-    std::ofstream file(path, std::ios::binary);
-    if (!file) {
-        std::cerr << "[SnapLLM] Failed to create file: " << path.string() << std::endl;
+    if (ec) {
+        std::cerr << "[SnapLLM] Failed to create cache directory: " << ec.message() << std::endl;
         return false;
     }
 
-    // Write header
-    KVCacheFileHeader header;
-    header.version = 1;
     header.set_context_id(entry.handle.id);
     header.set_model_id(entry.metadata.model_id);
     header.set_shape(entry.kv_cache->shape);
-    header.data_size = entry.kv_cache->memory_bytes();
+    const size_t tensor_size = entry.kv_cache->shape.layer_tensor_size();
+    const size_t data_size = entry.kv_cache->shape.total_size();
+    if (tensor_size == 0 || data_size == 0 ||
+        entry.kv_cache->layers.size() != entry.kv_cache->shape.num_layers) {
+        std::cerr << "[SnapLLM] Refusing to persist invalid KV cache shape" << std::endl;
+        return false;
+    }
+    for (const auto& layer : entry.kv_cache->layers) {
+        if (layer.keys.size() != tensor_size || layer.values.size() != tensor_size) {
+            std::cerr << "[SnapLLM] Refusing to persist inconsistent KV cache layers" << std::endl;
+            return false;
+        }
+    }
+
+    header.data_size = data_size;
     header.created_timestamp = std::chrono::duration_cast<std::chrono::seconds>(
         entry.metadata.stats.created_at.time_since_epoch()
     ).count();
 
-    file.write(reinterpret_cast<const char*>(&header), sizeof(header));
-
-    // Write layer data
+    kv_cache_detail::CRC32 data_checksum;
     for (const auto& layer : entry.kv_cache->layers) {
-        file.write(reinterpret_cast<const char*>(layer.keys.data()), layer.keys.size());
-        file.write(reinterpret_cast<const char*>(layer.values.data()), layer.values.size());
+        data_checksum.update(layer.keys.data(), layer.keys.size());
+        data_checksum.update(layer.values.data(), layer.values.size());
+    }
+    header.data_checksum = data_checksum.value();
+    header.header_checksum = kv_cache_detail::compute_header_checksum(header);
+
+    size_t validated_tensor_size = 0;
+    const auto validation_error = kv_cache_detail::validate_file_header(
+        header,
+        sizeof(header) + header.data_size,
+        validated_tensor_size
+    );
+    if (validation_error != kv_cache_detail::HeaderValidationError::None ||
+        validated_tensor_size != tensor_size) {
+        std::cerr << "[SnapLLM] Refusing to persist invalid KV cache: "
+                  << kv_cache_detail::validation_error_message(validation_error) << std::endl;
+        return false;
     }
 
-    // Compute and update checksum
-    // TODO: Implement proper checksum
+    const fs::path temporary_path = temporary_cache_path(path);
+    std::ofstream file(temporary_path, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        std::cerr << "[SnapLLM] Failed to create temporary cache file" << std::endl;
+        return false;
+    }
 
+    bool write_succeeded = write_exact(file, &header, sizeof(header));
+    for (const auto& layer : entry.kv_cache->layers) {
+        write_succeeded = write_succeeded &&
+                          write_exact(file, layer.keys.data(), layer.keys.size()) &&
+                          write_exact(file, layer.values.data(), layer.values.size());
+        if (!write_succeeded) {
+            break;
+        }
+    }
+    file.flush();
+    write_succeeded = write_succeeded && static_cast<bool>(file);
     file.close();
+    write_succeeded = write_succeeded && !file.fail();
+    if (!write_succeeded) {
+        std::cerr << "[SnapLLM] Failed while writing temporary cache file" << std::endl;
+        fs::remove(temporary_path, ec);
+        return false;
+    }
+
+    const uint64_t written_size = fs::file_size(temporary_path, ec);
+    if (ec || written_size != sizeof(header) + header.data_size) {
+        std::cerr << "[SnapLLM] Temporary cache file size validation failed" << std::endl;
+        fs::remove(temporary_path, ec);
+        return false;
+    }
+
+    if (!replace_file_atomically(temporary_path, path, ec)) {
+        std::cerr << "[SnapLLM] Failed to atomically replace cache file: "
+                  << ec.message() << std::endl;
+        fs::remove(temporary_path, ec);
+        return false;
+    }
 
     // Also save metadata JSON
     auto meta_path = paths_.get_context_metadata_path(entry.handle.id);
     fs::create_directories(meta_path.parent_path(), ec);
 
-    std::ofstream meta_file(meta_path);
+    const fs::path temporary_meta_path = temporary_cache_path(meta_path);
+    std::ofstream meta_file(temporary_meta_path, std::ios::binary | std::ios::trunc);
     if (meta_file) {
-        meta_file << "{\n";
-        meta_file << "  \"context_id\": \"" << entry.handle.id << "\",\n";
-        meta_file << "  \"model_id\": \"" << entry.metadata.model_id << "\",\n";
-        meta_file << "  \"token_count\": " << entry.metadata.token_count << ",\n";
-        meta_file << "  \"tier\": \"" << entry.tier << "\",\n";
-        meta_file << "  \"storage_size_bytes\": " << entry.metadata.storage_size_bytes << ",\n";
-        meta_file << "  \"num_layers\": " << entry.metadata.shape.num_layers << ",\n";
-        meta_file << "  \"num_heads\": " << entry.metadata.shape.num_heads << ",\n";
-        meta_file << "  \"head_dim\": " << entry.metadata.shape.head_dim << ",\n";
-        meta_file << "  \"sequence_length\": " << entry.metadata.shape.sequence_length << "\n";
-        meta_file << "}\n";
+        nlohmann::json metadata = {
+            {"context_id", entry.handle.id},
+            {"model_id", entry.metadata.model_id},
+            {"token_count", entry.metadata.token_count},
+            {"tier", entry.tier},
+            {"storage_size_bytes", entry.metadata.storage_size_bytes},
+            {"num_layers", entry.metadata.shape.num_layers},
+            {"num_heads", entry.metadata.shape.num_heads},
+            {"head_dim", entry.metadata.shape.head_dim},
+            {"sequence_length", entry.metadata.shape.sequence_length}
+        };
+        meta_file << metadata.dump(2) << '\n';
+        meta_file.flush();
         meta_file.close();
+        if (meta_file.fail() ||
+            !replace_file_atomically(temporary_meta_path, meta_path, ec)) {
+            fs::remove(temporary_meta_path, ec);
+            std::cerr << "[SnapLLM] Failed to persist context metadata" << std::endl;
+            return false;
+        }
+    } else {
+        std::cerr << "[SnapLLM] Failed to create context metadata" << std::endl;
+        return false;
     }
 
     std::cout << "[SnapLLM] Context saved successfully" << std::endl;
@@ -1062,26 +1270,70 @@ bool ContextManager::load_from_disk(const std::string& context_id, ContextEntry&
             continue;
         }
 
-        // Read header
-        KVCacheFileHeader header;
-        file.read(reinterpret_cast<char*>(&header), sizeof(header));
-
-        if (!header.is_valid()) {
-            std::cerr << "[SnapLLM] Invalid KV cache file header" << std::endl;
+        std::error_code ec;
+        const uint64_t file_size = fs::file_size(path, ec);
+        if (ec || file_size < sizeof(KVCacheFileHeader)) {
+            std::cerr << "[SnapLLM] Invalid KV cache file size" << std::endl;
             continue;
         }
 
-        // Create KV cache from header
-        auto kv_cache = std::make_unique<KVCache>();
-        kv_cache->context_id = header.get_context_id();
-        kv_cache->model_id = header.get_model_id();
-        kv_cache->shape = header.get_shape();
-        kv_cache->allocate();
+        KVCacheFileHeader header;
+        if (!read_exact(file, &header, sizeof(header))) {
+            std::cerr << "[SnapLLM] Truncated KV cache file header" << std::endl;
+            continue;
+        }
 
-        // Read layer data
+        size_t tensor_size = 0;
+        const auto validation_error =
+            kv_cache_detail::validate_file_header(header, file_size, tensor_size);
+        if (validation_error != kv_cache_detail::HeaderValidationError::None) {
+            std::cerr << "[SnapLLM] Invalid KV cache file: "
+                      << kv_cache_detail::validation_error_message(validation_error) << std::endl;
+            continue;
+        }
+        if (header.get_context_id() != context_id || header.get_model_id().empty()) {
+            std::cerr << "[SnapLLM] KV cache identifier mismatch" << std::endl;
+            continue;
+        }
+
+        std::shared_ptr<KVCache> kv_cache;
+        try {
+            kv_cache = std::make_shared<KVCache>();
+            kv_cache->context_id = header.get_context_id();
+            kv_cache->model_id = header.get_model_id();
+            kv_cache->shape = header.get_shape();
+            kv_cache->allocate();
+        } catch (const std::bad_alloc&) {
+            std::cerr << "[SnapLLM] Insufficient memory to load KV cache" << std::endl;
+            continue;
+        } catch (const std::length_error&) {
+            std::cerr << "[SnapLLM] KV cache allocation exceeds platform limits" << std::endl;
+            continue;
+        }
+        if (kv_cache->layers.size() != header.num_layers) {
+            std::cerr << "[SnapLLM] Failed to allocate KV cache layers" << std::endl;
+            continue;
+        }
+
+        kv_cache_detail::CRC32 data_checksum;
+        bool read_succeeded = true;
         for (auto& layer : kv_cache->layers) {
-            file.read(reinterpret_cast<char*>(layer.keys.data()), layer.keys.size());
-            file.read(reinterpret_cast<char*>(layer.values.data()), layer.values.size());
+            if (layer.keys.size() != tensor_size || layer.values.size() != tensor_size ||
+                !read_exact(file, layer.keys.data(), layer.keys.size()) ||
+                !read_exact(file, layer.values.data(), layer.values.size())) {
+                read_succeeded = false;
+                break;
+            }
+            data_checksum.update(layer.keys.data(), layer.keys.size());
+            data_checksum.update(layer.values.data(), layer.values.size());
+        }
+        if (!read_succeeded) {
+            std::cerr << "[SnapLLM] Truncated KV cache tensor data" << std::endl;
+            continue;
+        }
+        if (data_checksum.value() != header.data_checksum) {
+            std::cerr << "[SnapLLM] KV cache data checksum mismatch" << std::endl;
+            continue;
         }
 
         // Fill entry
@@ -1118,13 +1370,37 @@ void ContextManager::restore_persisted_contexts() {
 
     int restored_count = 0;
     size_t total_size = 0;
+    uintmax_t aggregate_metadata_bytes = 0;
 
+    size_t scanned_entries = 0;
     for (const auto& entry : fs::directory_iterator(metadata_path)) {
+        if (++scanned_entries > kMaximumPersistedContexts) {
+            std::cerr << "[SnapLLM] Persisted context limit reached; remaining metadata skipped"
+                      << std::endl;
+            break;
+        }
         if (entry.path().extension() != ".json") {
             continue;
         }
+        std::error_code size_error;
+        const auto metadata_size = fs::file_size(entry.path(), size_error);
+        if (size_error || metadata_size > kMaximumContextMetadataBytes) {
+            std::cerr << "[SnapLLM] Skipping oversized or unreadable context metadata: "
+                      << entry.path().filename().string() << std::endl;
+            continue;
+        }
+        if (aggregate_metadata_bytes >
+            kMaximumAggregateContextMetadataBytes - metadata_size) {
+            std::cerr << "[SnapLLM] Aggregate persisted metadata limit reached"
+                      << std::endl;
+            break;
+        }
+        aggregate_metadata_bytes += metadata_size;
 
         std::string context_id = entry.path().stem().string();
+        if (!is_safe_metadata_identifier(context_id)) {
+            continue;
+        }
 
         // Read metadata JSON
         std::ifstream meta_file(entry.path());
@@ -1136,37 +1412,46 @@ void ContextManager::restore_persisted_contexts() {
                                   std::istreambuf_iterator<char>());
         meta_file.close();
 
-        // Parse basic fields (simple parsing without full JSON library)
-        auto extract_field = [&](const std::string& field) -> std::string {
-            size_t pos = json_content.find("\"" + field + "\"");
-            if (pos == std::string::npos) return "";
-            pos = json_content.find(":", pos);
-            if (pos == std::string::npos) return "";
-            pos++;
-            while (pos < json_content.size() && (json_content[pos] == ' ' || json_content[pos] == '"')) pos++;
-            size_t end = pos;
-            while (end < json_content.size() && json_content[end] != '"' && json_content[end] != ',' && json_content[end] != '\n') end++;
-            return json_content.substr(pos, end - pos);
-        };
-
-        std::string model_id = extract_field("model_id");
-        std::string tier = extract_field("tier");
+        std::string model_id;
         int token_count = 0;
-        size_t storage_size = 0;
-
         try {
-            token_count = std::stoi(extract_field("token_count"));
-            storage_size = std::stoull(extract_field("storage_size_bytes"));
-        } catch (...) {}
+            const auto metadata = nlohmann::json::parse(json_content);
+            if (!metadata.is_object() ||
+                metadata.value("context_id", std::string()) != context_id) {
+                continue;
+            }
+            model_id = metadata.value("model_id", std::string());
+            token_count = metadata.value("token_count", 0);
+        } catch (const nlohmann::json::exception&) {
+            continue;
+        }
+        if (!is_safe_metadata_identifier(model_id) || token_count < 0) {
+            continue;
+        }
 
         // Check if KV cache file exists
         bool has_kv_file = false;
+        size_t storage_size = 0;
         for (const auto& t : {"hot", "warm", "cold"}) {
             auto kv_path = paths_.get_context_cache_path(context_id, t);
             if (fs::exists(kv_path)) {
-                has_kv_file = true;
-                tier = t;
-                break;
+                std::error_code cache_error;
+                const uint64_t cache_file_size = fs::file_size(kv_path, cache_error);
+                std::ifstream cache_file(kv_path, std::ios::binary);
+                KVCacheFileHeader header;
+                if (!cache_error && cache_file &&
+                    read_exact(cache_file, &header, sizeof(header))) {
+                    size_t tensor_size = 0;
+                    if (kv_cache_detail::validate_file_header(
+                            header, cache_file_size, tensor_size) ==
+                            kv_cache_detail::HeaderValidationError::None &&
+                        header.get_context_id() == context_id &&
+                        header.get_model_id() == model_id) {
+                        has_kv_file = true;
+                        storage_size = static_cast<size_t>(header.data_size);
+                        break;
+                    }
+                }
             }
         }
 
@@ -1192,6 +1477,7 @@ void ContextManager::restore_persisted_contexts() {
         contexts_[context_id] = std::move(ctx_entry);
         stats_.total_contexts++;
         stats_.cold_contexts++;
+        stats_.cold_memory_bytes += storage_size;
         total_size += storage_size;
         restored_count++;
 
@@ -1208,18 +1494,38 @@ void ContextManager::restore_persisted_contexts() {
     }
 }
 
-void ContextManager::update_access(const std::string& context_id) {
-    // Note: Caller should hold at least shared lock
+void ContextManager::update_access_locked(const std::string& context_id) {
     auto it = contexts_.find(context_id);
     if (it != contexts_.end()) {
         it->second.metadata.stats.last_accessed = std::chrono::system_clock::now();
+        it->second.metadata.stats.access_count++;
         if (it->second.kv_cache) {
             it->second.kv_cache->touch();
         }
     }
 }
 
+void ContextManager::record_cache_miss() {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    stats_.cache_misses++;
+}
+
+void ContextManager::record_query_success(double latency_ms) {
+    {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        stats_.queries_total++;
+        stats_.cache_hits++;
+    }
+    if (latency_ms > 0.0) {
+        query_latency_sum_.fetch_add(
+            static_cast<uint64_t>(latency_ms * 1000),
+            std::memory_order_relaxed);
+        query_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void ContextManager::check_tiering() {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     if (!auto_tiering_enabled_) {
         return;
     }
@@ -1238,24 +1544,16 @@ void ContextManager::check_tiering() {
 //=============================================================================
 
 std::string ContextManager::compute_content_hash(const std::string& content) {
-    // Simple hash using CRC32 + size for fast lookup
-    // For production, consider SHA256 for collision resistance
-    uint32_t crc = 0xFFFFFFFF;
-    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(content.data());
-    size_t size = content.size();
-
-    for (size_t i = 0; i < size; ++i) {
-        crc ^= bytes[i];
-        for (int j = 0; j < 8; ++j) {
-            crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
-        }
-    }
-    crc = ~crc;
-
-    // Combine CRC32 with content length for uniqueness
+    unsigned char digest[SHA256_DIGEST_SIZE]{};
+    sha256_hash(
+        digest,
+        reinterpret_cast<const unsigned char*>(content.data()),
+        content.size());
     std::stringstream ss;
-    ss << std::hex << std::setfill('0') << std::setw(8) << crc
-       << "_" << std::setw(8) << size;
+    ss << std::hex << std::setfill('0');
+    for (const unsigned char byte : digest) {
+        ss << std::setw(2) << static_cast<unsigned int>(byte);
+    }
     return ss.str();
 }
 
@@ -1294,9 +1592,9 @@ ContextHandle ContextManager::find_or_create(
     std::cout << "[SnapLLM MCB] find_or_create for model '" << model_id
               << "', content hash: " << content_hash << std::endl;
 
-    // First, try to find existing context (read lock)
+    // First, try to find existing context.
     {
-        std::shared_lock<std::shared_mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(mutex_);
         auto it = hash_index_.find(key);
         if (it != hash_index_.end()) {
             auto ctx_it = contexts_.find(it->second);
@@ -1304,11 +1602,7 @@ ContextHandle ContextManager::find_or_create(
                 std::cout << "[SnapLLM MCB] Cache HIT! Reusing context '"
                           << ctx_it->second.handle.id << "'" << std::endl;
                 stats_.cache_hits++;
-
-                // Update access time (need upgrade to write lock conceptually,
-                // but we'll do it separately to avoid deadlock)
-                const_cast<ContextEntry&>(ctx_it->second).metadata.stats.last_accessed =
-                    std::chrono::system_clock::now();
+                update_access_locked(ctx_it->second.handle.id);
 
                 return ctx_it->second.handle;
             }
@@ -1317,7 +1611,7 @@ ContextHandle ContextManager::find_or_create(
 
     // Not found - need to ingest (this is the expensive O(n²) operation)
     std::cout << "[SnapLLM MCB] Cache MISS. Ingesting new context..." << std::endl;
-    stats_.cache_misses++;
+    record_cache_miss();
 
     // Create spec for ingestion
     ContextSpec spec;

@@ -67,14 +67,15 @@ import {
   getConfig,
   getDefaultModelsPath,
   getWorkspaceFolders,
-  deleteWorkspaceFolder,
   getDefaultWorkspacePath,
   WorkspaceFolderInfo,
   isTauriAvailable,
   detectModelType,
   getModelTypeLabel,
   getModelTypeBadgeColor,
+  ModelInfo,
   ModelType,
+  handleApiError,
 } from '../lib/api';
 import { Button, IconButton, Badge, Card, Modal, Progress, Toggle } from '../components/ui';
 
@@ -82,19 +83,7 @@ import { Button, IconButton, Badge, Card, Modal, Progress, Toggle } from '../com
 // Types
 // ============================================================================
 
-interface LoadedModel {
-  id: string;
-  name: string;
-  engine: string;
-  device: string;
-  status: string;
-  ram_usage_mb: number;
-  strategy?: string;
-  requests_per_hour: number;
-  avg_latency_ms: number;
-  throughput_toks: number;
-  loaded_at: string;
-}
+type LoadedModel = ModelInfo;
 
 interface ModelSpecifications {
   parameters: string;
@@ -1007,7 +996,7 @@ export default function Models() {
   const [showRuntimeConfig, setShowRuntimeConfig] = useState(false);
   const [modelId, setModelId] = useState('');
   const [filePath, setFilePath] = useState('');
-  const [strategy, setStrategy] = useState('balanced');
+  const [strategy, setStrategy] = useState('auto');
   const [modelType, setModelType] = useState<'auto' | 'llm' | 'diffusion' | 'vision'>('auto');
   const [filterTab, setFilterTab] = useState<'all' | 'llm' | 'diffusion' | 'vision'>('all');
   // Multi-file model paths (for SD3, FLUX, Wan2, Vision)
@@ -1025,8 +1014,6 @@ export default function Models() {
   const [showWorkspaceManager, setShowWorkspaceManager] = useState(false);
   const [workspaceFolders, setWorkspaceFolders] = useState<WorkspaceFolderInfo[]>([]);
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(false);
-  const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
-  const [confirmDeleteFolder, setConfirmDeleteFolder] = useState<WorkspaceFolderInfo | null>(null);
 
   // Sync defaults from server config (if available)
   useEffect(() => {
@@ -1056,7 +1043,7 @@ export default function Models() {
         setScanError('No GGUF models found. Make sure the SnapLLM server is running on port 6930.');
       }
     } catch (error: any) {
-      console.error('[Models] Error scanning folder:', error);
+      console.error('[Models] Error scanning folder:', handleApiError(error));
       setFolderModels([]);
       setScanError(`Scan failed: ${error?.message || 'Server may be offline'}`);
     } finally {
@@ -1075,7 +1062,7 @@ export default function Models() {
         const models = await scanFolder(folder);
         setFolderModels(models);
       } catch (error) {
-        console.error('[Models] Error scanning folder:', error);
+        console.error('[Models] Error scanning folder:', handleApiError(error));
         setFolderModels([]);
       } finally {
         setIsScanning(false);
@@ -1105,7 +1092,7 @@ export default function Models() {
       const folders = await getWorkspaceFolders();
       setWorkspaceFolders(folders);
     } catch (error) {
-      console.error('[Models] Error loading workspace folders:', error);
+      console.error('[Models] Error loading workspace folders:', handleApiError(error));
       setWorkspaceFolders([]);
     } finally {
       setIsLoadingWorkspace(false);
@@ -1119,27 +1106,12 @@ export default function Models() {
     }
   }, [showWorkspaceManager]);
 
-  // Handle folder deletion
-  const handleDeleteFolder = async (folder: WorkspaceFolderInfo) => {
-    setDeletingFolder(folder.path);
-    try {
-      await deleteWorkspaceFolder(folder.path);
-      setNotification({ type: 'success', message: `Successfully deleted ${folder.name}` });
-      setTimeout(() => setNotification(null), 5000);
-      // Refresh the workspace folders list
-      await loadWorkspaceFolders();
-    } catch (error) {
-      console.error('[Models] Error deleting folder:', error);
-      setNotification({ type: 'error', message: `Failed to delete ${folder.name}: ${error}` });
-      setTimeout(() => setNotification(null), 8000);
-    } finally {
-      setDeletingFolder(null);
-      setConfirmDeleteFolder(null);
-    }
-  };
-
   // Queries
-  const { data: modelsResponse, isLoading } = useQuery({
+  const {
+    data: modelsResponse,
+    isLoading,
+    isError: modelsLoadFailed,
+  } = useQuery({
     queryKey: ['models'],
     queryFn: listModels,
     refetchInterval: 5000,
@@ -1349,6 +1321,12 @@ export default function Models() {
             <Card className="p-12 text-center">
               <Loader className="w-8 h-8 animate-spin mx-auto text-brand-500 mb-3" />
               <p className="text-surface-500">Loading models...</p>
+            </Card>
+          ) : modelsLoadFailed ? (
+            <Card className="p-12 text-center">
+              <AlertTriangle className="w-8 h-8 mx-auto text-error-500 mb-3" />
+              <p className="font-medium text-error-700 dark:text-error-300">Unable to load models</p>
+              <p className="mt-1 text-sm text-surface-500">Check the server connection and try again.</p>
             </Card>
           ) : models.length > 0 ? (
             models.map((model, i) => {
@@ -1892,9 +1870,9 @@ export default function Models() {
                   value={strategy}
                   onChange={(e) => setStrategy(e.target.value)}
                 >
-                  <option value="balanced">Balanced Memory</option>
-                  <option value="aggressive">Aggressive (More RAM)</option>
-                  <option value="conservative">Conservative (Less RAM)</option>
+                  <option value="auto">Automatic hardware</option>
+                  <option value="cpu">CPU only</option>
+                  <option value="gpu">Full GPU offload</option>
                 </select>
                 <div className="flex gap-2">
                   <Button variant="secondary" onClick={() => {
@@ -2034,17 +2012,13 @@ export default function Models() {
 
                     {folder.exists && (
                       <Button
-                        variant="danger"
+                        variant="secondary"
                         size="sm"
-                        onClick={() => setConfirmDeleteFolder(folder)}
-                        disabled={deletingFolder === folder.path}
+                        disabled
+                        title="Stop SnapLLM and remove this folder with your operating-system file manager."
                       >
-                        {deletingFolder === folder.path ? (
-                          <Loader className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="w-4 h-4" />
-                        )}
-                        Delete
+                        <Trash2 className="w-4 h-4" />
+                        Remove externally
                       </Button>
                     )}
                   </div>
@@ -2069,8 +2043,8 @@ export default function Models() {
                   Warning
                 </p>
                 <p className="text-xs text-warning-700 dark:text-warning-300 mt-1">
-                  Deleting workspace folders will permanently remove cached tensors and data.
-                  This action cannot be undone.
+                  In-app recursive deletion is disabled. Stop SnapLLM, then use
+                  your operating-system file manager to remove a workspace folder.
                 </p>
               </div>
             </div>
@@ -2083,64 +2057,6 @@ export default function Models() {
             </Button>
           </div>
         </div>
-      </Modal>
-
-      {/* Delete Confirmation Modal */}
-      <Modal
-        isOpen={!!confirmDeleteFolder}
-        onClose={() => setConfirmDeleteFolder(null)}
-        title="Confirm Delete"
-        size="sm"
-      >
-        {confirmDeleteFolder && (
-          <div className="space-y-4">
-            <div className="p-4 rounded-lg bg-error-50 dark:bg-error-900/20 border border-error-200 dark:border-error-800">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-error-100 dark:bg-error-900/30 flex items-center justify-center flex-shrink-0">
-                  <Trash2 className="w-5 h-5 text-error-600 dark:text-error-400" />
-                </div>
-                <div>
-                  <p className="font-medium text-error-800 dark:text-error-200">
-                    Delete {confirmDeleteFolder.name}?
-                  </p>
-                  <p className="text-sm text-error-700 dark:text-error-300">
-                    {confirmDeleteFolder.files} {confirmDeleteFolder.files === 1 ? 'item' : 'items'} will be deleted
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <p className="text-sm text-surface-600 dark:text-surface-400">
-              This will permanently delete all files in:
-            </p>
-            <code className="text-xs text-surface-600 dark:text-surface-400 block p-2 rounded bg-surface-100 dark:bg-surface-800 border border-surface-200 dark:border-surface-700">
-              {confirmDeleteFolder.path}
-            </code>
-
-            <div className="flex justify-end gap-2 pt-4 border-t border-surface-200 dark:border-surface-700">
-              <Button variant="secondary" onClick={() => setConfirmDeleteFolder(null)}>
-                Cancel
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => handleDeleteFolder(confirmDeleteFolder)}
-                disabled={deletingFolder === confirmDeleteFolder.path}
-              >
-                {deletingFolder === confirmDeleteFolder.path ? (
-                  <>
-                    <Loader className="w-4 h-4 animate-spin" />
-                    Deleting...
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-4 h-4" />
-                    Delete Permanently
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-        )}
       </Modal>
 
       {/* Model Specifications Panel */}

@@ -3,9 +3,18 @@
 
 api.info
 name SnapLLM
-version 1.0.0
+version 1.3.1
 base_url http://localhost:6930
-description "Multi-model LLM inference engine with <1ms model switching"
+description "Local multi-model LLM inference with resident model selection"
+
+# SECURITY
+# Loopback can run without a key. Non-loopback binds require SNAPLLM_API_KEY
+# with 32-4096 visible ASCII characters.
+# Protected routes accept:
+#   Authorization: Bearer <SNAPLLM_API_KEY>
+#   X-API-Key: <SNAPLLM_API_KEY>
+# Root and /health remain public. Host is validated on every request.
+# Browser origins must exactly match the configured allowlist.
 
 # ============================================================================
 # HEALTH & STATUS
@@ -18,7 +27,7 @@ path method description
 
 endpoint.health.response
 status ok
-version "1.0.0"
+version "1.3.1"
 timestamp "2026-01-19T12:00:00Z"
 models_loaded 3
 current_model medicine
@@ -289,7 +298,7 @@ table.endpoints.models
 path method description
 /api/v1/models GET "List models (extended format)"
 /api/v1/models/load POST "Load a model from file"
-/api/v1/models/switch POST "Switch active model (<1ms)"
+/api/v1/models/switch POST "Select an already-loaded model"
 /api/v1/models/unload POST "Unload a model"
 /api/v1/models/:name DELETE "Unload model by name"
 
@@ -503,7 +512,7 @@ error {
 claude_code.configuration
 # Environment variables to use SnapLLM with Claude Code
 ANTHROPIC_BASE_URL http://localhost:6930
-ANTHROPIC_AUTH_TOKEN snapllm
+ANTHROPIC_AUTH_TOKEN "$SNAPLLM_API_KEY"
 
 claude_code.usage
 # Run Claude Code with SnapLLM model

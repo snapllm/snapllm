@@ -546,6 +546,36 @@
     @apply p-6;
   }
 
+  @media (max-width: 767px) {
+    .sidebar {
+      width: var(--sidebar-collapsed-width);
+      overflow-x: hidden;
+    }
+
+    .main-content,
+    .main-content-expanded {
+      min-width: 0;
+      margin-left: var(--sidebar-collapsed-width);
+      overflow-x: clip;
+    }
+
+    .header {
+      @apply px-3;
+    }
+
+    .header > div:nth-child(2) {
+      display: none;
+    }
+
+    .header p {
+      display: none;
+    }
+
+    .page {
+      @apply p-3;
+    }
+  }
+
   .page-header {
     @apply mb-8;
   }

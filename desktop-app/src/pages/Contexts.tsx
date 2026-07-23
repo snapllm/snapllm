@@ -56,7 +56,9 @@ import {
   ContextStatsResponse,
   ContextIngestResponse,
   ContextQueryResponse,
+  ContextQueryRequest,
   Context,
+  ModelInfo,
 } from '../lib/api';
 import { Button, IconButton, Badge, Card, Toggle, Modal } from '../components/ui';
 
@@ -87,8 +89,8 @@ const TIER_COLORS = {
 };
 
 const TIER_DESCRIPTIONS = {
-  hot: 'GPU VRAM - Instant injection (<0.1ms)',
-  warm: 'CPU RAM - Fast restore (<1ms)',
+  hot: 'GPU VRAM - resident cache',
+  warm: 'CPU RAM - loaded cache',
   cold: 'SSD/Disk - Persistent storage (~10ms)',
 };
 
@@ -126,7 +128,7 @@ export default function Contexts() {
   // API Queries
   const { data: modelsData } = useQuery({
     queryKey: ['models'],
-    queryFn: listModels,
+    queryFn: () => listModels(),
     refetchInterval: 10000,
   });
 
@@ -142,7 +144,7 @@ export default function Contexts() {
     refetchInterval: 5000,
   });
 
-  const loadedModels = modelsData?.models?.filter((m: any) => m.status === 'loaded' || !m.status) || [];
+  const loadedModels = modelsData?.models?.filter((model) => model.status === 'loaded' || !model.status) || [];
 
   // Mutations
   const ingestMutation = useMutation({
@@ -156,7 +158,7 @@ export default function Contexts() {
   });
 
   const queryMutation = useMutation({
-    mutationFn: ({ contextId, request }: { contextId: string; request: any }) =>
+    mutationFn: ({ contextId, request }: { contextId: string; request: ContextQueryRequest }) =>
       queryContext(contextId, request),
     onSuccess: (data) => {
       setQueryResult(data);
@@ -558,7 +560,7 @@ export default function Contexts() {
               className="w-full px-3 py-2 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
             >
               <option value="">Select a model...</option>
-              {loadedModels.map((model: any) => (
+              {loadedModels.map((model: ModelInfo) => (
                 <option key={model.id} value={model.id}>{model.name}</option>
               ))}
             </select>

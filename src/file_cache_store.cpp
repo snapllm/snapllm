@@ -18,6 +18,10 @@
 
 namespace snapllm {
 
+namespace {
+constexpr uintmax_t kMaximumCacheReadBytes = 1024ULL * 1024ULL * 1024ULL;
+}
+
 //=============================================================================
 // Constructor / Destructor
 //=============================================================================
@@ -200,9 +204,13 @@ CacheReadResult FileCacheStore::read(
     // Get file size
     std::error_code ec;
     auto file_size = fs::file_size(cache_path, ec);
-    if (ec) {
+    const uintmax_t effective_limit =
+        capacity_bytes_ == 0
+            ? kMaximumCacheReadBytes
+            : (std::min)(static_cast<uintmax_t>(capacity_bytes_), kMaximumCacheReadBytes);
+    if (ec || file_size > effective_limit) {
         result.success = false;
-        result.error_message = "Failed to get file size";
+        result.error_message = ec ? "Failed to get file size" : "Cache entry exceeds read limit";
         return result;
     }
 
@@ -252,7 +260,7 @@ CacheReadResult FileCacheStore::read(
             for (size_t i = 0; i < result.data.size(); ++i) {
                 crc ^= bytes[i];
                 for (int j = 0; j < 8; ++j) {
-                    crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
+                    crc = (crc >> 1) ^ (0xEDB88320U & (0U - (crc & 1U)));
                 }
             }
             computed = ~crc;
@@ -356,6 +364,8 @@ bool FileCacheStore::remove(const std::string& cache_id) {
         metadata_cache_.erase(it);
     }
 
+    const size_t remaining_entries = metadata_cache_.size();
+    const size_t remaining_bytes = used_bytes_;
     lock.unlock();
 
     // Delete files
@@ -374,10 +384,10 @@ bool FileCacheStore::remove(const std::string& cache_id) {
 
     // Update stats
     {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
+        std::lock_guard<std::mutex> stats_lock(stats_mutex_);
         stats_.deletes++;
-        stats_.total_entries = metadata_cache_.size();
-        stats_.total_size_bytes = used_bytes_;
+        stats_.total_entries = remaining_entries;
+        stats_.total_size_bytes = remaining_bytes;
     }
 
     return removed;
@@ -545,7 +555,7 @@ size_t FileCacheStore::clear() {
 
     // Update stats
     {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
+        std::lock_guard<std::mutex> stats_lock(stats_mutex_);
         stats_.total_entries = 0;
         stats_.total_size_bytes = 0;
     }
@@ -783,7 +793,7 @@ uint32_t FileCacheStore::compute_file_checksum(const fs::path& path) const {
         for (size_t i = 0; i < count; ++i) {
             crc ^= bytes[i];
             for (int j = 0; j < 8; ++j) {
-                crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
+                crc = (crc >> 1) ^ (0xEDB88320U & (0U - (crc & 1U)));
             }
         }
     }

@@ -2,7 +2,7 @@
  * @file model_manager.cpp
  * @brief Model Manager Implementation
  *
- * SnapLLM Model Manager - Ultra-fast multi-model orchestration
+ * SnapLLM Model Manager - multi-model orchestration
  */
 
 #include "snapllm/model_manager.h"
@@ -49,11 +49,13 @@ ModelManager::ModelManager(std::shared_ptr<VPIDWorkspace> vpid)
 
 bool ModelManager::load_model(const std::string& name, const std::string& gguf_path,
                                bool cache_only, DomainType domain, const GPUConfig& gpu_config) {
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
     std::cout << "\n[SnapLLM] Loading model: " << name << std::endl;
     std::cout << "[SnapLLM] Path: " << gguf_path << std::endl;
 
     if (cache_only) {
-        std::cout << "[SnapLLM] Cache-only mode: creating vPID cache without inference context" << std::endl;
+        std::cerr << "[SnapLLM] Cache-only model loading is not implemented" << std::endl;
+        return false;
     }
 
     // Domain-specific cache tuning (for future optimization)
@@ -79,6 +81,7 @@ bool ModelManager::load_model(const std::string& name, const std::string& gguf_p
     bool success = bridge_->load_and_dequantize_model(name, gguf_path, false, gpu_config);
 
     if (success) {
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
         loaded_models_.insert(name);
         model_paths_[name] = gguf_path;  // Store path for auto-reload
         if (current_model_.empty()) {
@@ -91,25 +94,39 @@ bool ModelManager::load_model(const std::string& name, const std::string& gguf_p
 }
 
 void ModelManager::unload_model(const std::string& name) {
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
     bridge_->unload_model(name);
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
     loaded_models_.erase(name);
+    model_paths_.erase(name);
     if (current_model_ == name) {
         current_model_.clear();
     }
 }
 
 bool ModelManager::switch_model(const std::string& name) {
-    if (loaded_models_.find(name) == loaded_models_.end()) {
-        std::cerr << "[SnapLLM] Model not loaded: " << name << std::endl;
-        return false;
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+    {
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
+        if (loaded_models_.find(name) == loaded_models_.end()) {
+            std::cerr << "[SnapLLM] Model not loaded: " << name << std::endl;
+            return false;
+        }
     }
 
-    auto start = std::chrono::high_resolution_clock::now();
-    current_model_ = name;
-    auto end = std::chrono::high_resolution_clock::now();
+    auto start = std::chrono::steady_clock::now();
+    if (!ensure_model_in_gpu_locked(name)) {
+        std::cerr << "[SnapLLM] Could not make model ready: " << name << std::endl;
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
+        current_model_ = name;
+    }
+    auto end = std::chrono::steady_clock::now();
 
     auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    std::cout << "[SnapLLM] Switched to '" << name << "' in "
+    std::cout << "[SnapLLM] Model '" << name << "' ready in "
               << (duration_us.count() / 1000.0) << "ms" << std::endl;
 
     return true;
@@ -117,16 +134,17 @@ bool ModelManager::switch_model(const std::string& name) {
 
 std::string ModelManager::generate(const std::string& prompt, size_t max_tokens, size_t* actual_tokens,
                                    float temperature, float top_p, int top_k, float repeat_penalty) {
-    if (current_model_.empty()) {
+    const std::string selected_model = get_current_model();
+    if (selected_model.empty()) {
         return "Error: No model selected. Call load_model() first.";
     }
 
     // Auto-reload model if it was evicted from GPU
-    if (!ensure_model_in_gpu(current_model_)) {
-        return "Error: Could not load model to GPU: " + current_model_;
+    if (!ensure_model_in_gpu(selected_model)) {
+        return "Error: Could not load model to GPU: " + selected_model;
     }
 
-    return bridge_->generate_text(current_model_, prompt, static_cast<int>(max_tokens), actual_tokens,
+    return bridge_->generate_text(selected_model, prompt, static_cast<int>(max_tokens), actual_tokens,
                                   temperature, top_p, top_k, repeat_penalty);
 }
 
@@ -156,7 +174,8 @@ std::vector<BatchResult> ModelManager::generate_batch(
     float default_temp, float default_top_p,
     int default_top_k, float default_repeat_penalty)
 {
-    if (current_model_.empty()) {
+    const std::string selected_model = get_current_model();
+    if (selected_model.empty()) {
         std::vector<BatchResult> results(items.size());
         for (auto& r : results) {
             r.success = false;
@@ -165,36 +184,34 @@ std::vector<BatchResult> ModelManager::generate_batch(
         return results;
     }
 
-    if (!ensure_model_in_gpu(current_model_)) {
+    if (!ensure_model_in_gpu(selected_model)) {
         std::vector<BatchResult> results(items.size());
         for (auto& r : results) {
             r.success = false;
-            r.error = "Could not load model to GPU: " + current_model_;
+            r.error = "Could not load model to GPU: " + selected_model;
         }
         return results;
     }
 
     return bridge_->generate_batch_parallel(
-        current_model_, items, default_temp, default_top_p, default_top_k, default_repeat_penalty);
+        selected_model, items, default_temp, default_top_p, default_top_k, default_repeat_penalty);
 }
 
 std::string ModelManager::run_inference_from_cache(const std::string& model_name,
                                                     const std::string& prompt, int max_tokens) {
-    // Switch to model if needed
-    if (current_model_ != model_name) {
-        if (!switch_model(model_name)) {
-            return "Error: Could not switch to model " + model_name;
-        }
-    }
-
-    return generate(prompt, max_tokens);
+    (void)model_name;
+    (void)prompt;
+    (void)max_tokens;
+    throw std::logic_error("Cache-only inference is not implemented");
 }
 
 std::string ModelManager::get_current_model() const {
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
     return current_model_;
 }
 
 std::vector<std::string> ModelManager::get_loaded_models() const {
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
     return std::vector<std::string>(loaded_models_.begin(), loaded_models_.end());
 }
 
@@ -214,30 +231,40 @@ const ValidationConfig& ModelManager::get_validation_config() const {
 size_t ModelManager::generate_streaming(const std::string& prompt, TokenCallback callback,
                                         size_t max_tokens, float temperature,
                                         float top_p, int top_k, float repeat_penalty) {
-    if (current_model_.empty()) {
+    const std::string selected_model = get_current_model();
+    if (selected_model.empty()) {
         callback("Error: No model selected. Call load_model() first.", -1, true);
         return 0;
     }
 
     // Auto-reload model if it was evicted from GPU
-    if (!ensure_model_in_gpu(current_model_)) {
-        callback("Error: Could not load model to GPU: " + current_model_, -1, true);
+    if (!ensure_model_in_gpu(selected_model)) {
+        callback("Error: Could not load model to GPU: " + selected_model, -1, true);
         return 0;
     }
 
-    return bridge_->generate_text_streaming(current_model_, prompt, callback,
+    return bridge_->generate_text_streaming(selected_model, prompt, callback,
                                             static_cast<int>(max_tokens),
                                             temperature, top_p, top_k, repeat_penalty);
 }
 
 void ModelManager::print_cache_stats() const {
+    std::vector<std::string> models;
+    std::string current_model;
+    bool prompt_cache_enabled;
+    {
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
+        models.assign(loaded_models_.begin(), loaded_models_.end());
+        current_model = current_model_;
+        prompt_cache_enabled = prompt_cache_enabled_;
+    }
     std::cout << "\n=== SnapLLM Cache Statistics ===" << std::endl;
-    std::cout << "Loaded models: " << loaded_models_.size() << std::endl;
-    std::cout << "Current model: " << (current_model_.empty() ? "(none)" : current_model_) << std::endl;
-    std::cout << "Prompt cache: " << (prompt_cache_enabled_ ? "enabled" : "disabled") << std::endl;
+    std::cout << "Loaded models: " << models.size() << std::endl;
+    std::cout << "Current model: " << (current_model.empty() ? "(none)" : current_model) << std::endl;
+    std::cout << "Prompt cache: " << (prompt_cache_enabled ? "enabled" : "disabled") << std::endl;
 
     // Print workspace stats for each model
-    for (const auto& model : loaded_models_) {
+    for (const auto& model : models) {
         auto workspace = bridge_->get_workspace(model);
         if (workspace) {
             const VPIDStats& stats = workspace->get_stats();
@@ -252,13 +279,12 @@ void ModelManager::print_cache_stats() const {
 }
 
 void ModelManager::clear_prompt_cache() {
-    // Clear any cached prompts/KV cache
-    std::cout << "[SnapLLM] Prompt cache cleared" << std::endl;
+    throw std::logic_error("Prompt-cache clearing is not implemented");
 }
 
 void ModelManager::enable_prompt_cache(bool enabled) {
-    prompt_cache_enabled_ = enabled;
-    std::cout << "[SnapLLM] Prompt cache " << (enabled ? "enabled" : "disabled") << std::endl;
+    (void)enabled;
+    throw std::logic_error("Prompt-cache control is not implemented");
 }
 
 std::shared_ptr<VPIDWorkspace> ModelManager::get_workspace(const std::string& model_name) const {
@@ -266,16 +292,26 @@ std::shared_ptr<VPIDWorkspace> ModelManager::get_workspace(const std::string& mo
 }
 
 bool ModelManager::ensure_model_in_gpu(const std::string& name) {
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+    return ensure_model_in_gpu_locked(name);
+}
+
+bool ModelManager::ensure_model_in_gpu_locked(const std::string& name) {
     // Check if model is currently loaded in GPU via VPIDBridge
     if (bridge_->is_model_loaded(name)) {
         return true;  // Model is in GPU
     }
 
     // Model was evicted - reload from disk cache
-    auto path_it = model_paths_.find(name);
-    if (path_it == model_paths_.end()) {
-        std::cerr << "[SnapLLM] Cannot reload model '" << name << "': path not found" << std::endl;
-        return false;
+    std::string model_path;
+    {
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
+        auto path_it = model_paths_.find(name);
+        if (path_it == model_paths_.end()) {
+            std::cerr << "[SnapLLM] Cannot reload model '" << name << "': path not found" << std::endl;
+            return false;
+        }
+        model_path = path_it->second;
     }
 
     std::cout << "[SnapLLM] Auto-reloading evicted model: " << name << std::endl;
@@ -283,7 +319,7 @@ bool ModelManager::ensure_model_in_gpu(const std::string& name) {
 
     // Reload the model - mmap + OS page cache makes this fast after first load
     auto reload_start = std::chrono::high_resolution_clock::now();
-    bool success = bridge_->load_and_dequantize_model(name, path_it->second);
+    bool success = bridge_->load_and_dequantize_model(name, model_path);
     auto reload_end = std::chrono::high_resolution_clock::now();
     auto reload_ms = std::chrono::duration_cast<std::chrono::milliseconds>(reload_end - reload_start).count();
 
@@ -301,6 +337,7 @@ bool ModelManager::ensure_model_in_gpu(const std::string& name) {
 //=============================================================================
 
 bool ModelManager::is_loaded(const std::string& name) const {
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
     return loaded_models_.find(name) != loaded_models_.end();
 }
 
@@ -313,17 +350,18 @@ bool ModelManager::unload_model_bool(const std::string& name) {
 }
 
 std::optional<ModelManager::ModelInfo> ModelManager::get_model_info(const std::string& name) const {
-    if (!is_loaded(name)) {
-        return std::nullopt;
-    }
-
     ModelInfo info;
     info.id = name;
 
-    // Get path
-    auto path_it = model_paths_.find(name);
-    if (path_it != model_paths_.end()) {
-        info.path = path_it->second;
+    {
+        std::lock_guard<std::mutex> state_lock(state_mutex_);
+        if (loaded_models_.find(name) == loaded_models_.end()) {
+            return std::nullopt;
+        }
+        auto path_it = model_paths_.find(name);
+        if (path_it != model_paths_.end()) {
+            info.path = path_it->second;
+        }
     }
 
     // Get info from bridge

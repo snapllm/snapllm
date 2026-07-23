@@ -10,64 +10,137 @@
 #include <iostream>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include "json.hpp"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
-// Simple JSON serialization (can be replaced with proper JSON library if needed)
 namespace {
 
-std::string escape_json_string(const std::string& str) {
-    std::ostringstream oss;
-    for (char c : str) {
-        switch (c) {
-            case '"': oss << "\\\""; break;
-            case '\\': oss << "\\\\"; break;
-            case '\b': oss << "\\b"; break;
-            case '\f': oss << "\\f"; break;
-            case '\n': oss << "\\n"; break;
-            case '\r': oss << "\\r"; break;
-            case '\t': oss << "\\t"; break;
-            default:
-                if (c < 0x20) {
-                    oss << "\\u" << std::hex << std::setw(4) << std::setfill('0') << static_cast<int>(c);
-                } else {
-                    oss << c;
-                }
+constexpr uintmax_t kMaximumWorkspaceJsonBytes = 16 * 1024 * 1024;
+constexpr std::size_t kMaximumMetadataStringBytes = 64 * 1024;
+using json = nlohmann::json;
+#ifdef SNAPLLM_WORKSPACE_TEST_HOOKS
+int atomic_writes_until_failure = -1;
+#endif
+
+bool is_bounded_regular_file(const std::filesystem::path& path) {
+    std::error_code error;
+    return std::filesystem::is_regular_file(path, error) &&
+           !error &&
+           std::filesystem::file_size(path, error) <= kMaximumWorkspaceJsonBytes &&
+           !error;
+}
+
+bool is_bounded_string(const std::string& value) {
+    return value.size() <= kMaximumMetadataStringBytes;
+}
+
+bool is_safe_metadata_path(
+    const std::filesystem::path& relative,
+    const std::string& model_name,
+    const std::string& quant_type) {
+    if (relative.empty() || relative.is_absolute() || relative.has_root_name() ||
+        relative.lexically_normal() != relative ||
+        relative.filename() != "metadata.json") {
+        return false;
+    }
+    auto component = relative.begin();
+    if (component == relative.end() || component->string() != model_name) return false;
+    ++component;
+    if (component == relative.end() || component->string() != quant_type) return false;
+    for (; component != relative.end(); ++component) {
+        const auto value = component->string();
+        if (value.empty() || value == "." || value == "..") return false;
+    }
+    return true;
+}
+
+bool atomic_write_text(
+    const std::filesystem::path& destination,
+    const std::string& contents) {
+#ifdef SNAPLLM_WORKSPACE_TEST_HOOKS
+    if (atomic_writes_until_failure == 0) return false;
+    if (atomic_writes_until_failure > 0) --atomic_writes_until_failure;
+#endif
+    const auto nonce =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    auto temporary = destination;
+    temporary += ".tmp." + std::to_string(nonce);
+    {
+        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+        if (!file) return false;
+        file.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+        file.flush();
+        if (!file) {
+            file.close();
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            return false;
         }
     }
-    return oss.str();
-}
-
-std::string read_json_string(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\":\"";
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return "";
-
-    pos += search.length();
-    size_t end = json.find("\"", pos);
-    if (end == std::string::npos) return "";
-
-    return json.substr(pos, end - pos);
-}
-
-size_t read_json_number(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\":";
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return 0;
-
-    pos += search.length();
-    size_t end = json.find_first_of(",}", pos);
-    if (end == std::string::npos) return 0;
-
-    std::string num_str = json.substr(pos, end - pos);
-    try {
-        return std::stoull(num_str);
-    } catch (...) {
-        return 0;
+#ifdef _WIN32
+    if (!MoveFileExW(
+            temporary.c_str(), destination.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        return false;
     }
+#else
+    std::error_code error;
+    std::filesystem::rename(temporary, destination, error);
+    if (error) {
+        std::filesystem::remove(temporary, error);
+        return false;
+    }
+#endif
+    return true;
 }
 
 } // anonymous namespace
 
 namespace snapllm {
+
+#ifdef SNAPLLM_WORKSPACE_TEST_HOOKS
+void set_workspace_atomic_write_failure_for_test(bool enabled) noexcept {
+    atomic_writes_until_failure = enabled ? 0 : -1;
+}
+
+void set_workspace_atomic_write_failure_after_for_test(
+    int successful_writes) noexcept {
+    atomic_writes_until_failure = successful_writes;
+}
+#endif
+
+bool is_safe_workspace_component(const std::string& value) noexcept {
+    if (value.empty() || value.size() > 255 || value == "." || value == "..") {
+        return false;
+    }
+    return std::all_of(value.begin(), value.end(), [](char character) {
+        const auto byte = static_cast<unsigned char>(character);
+        return byte >= 0x20U && character != '/' && character != '\\' &&
+               character != ':' && character != '\0';
+    });
+}
+
+bool is_path_within_workspace(
+    const std::filesystem::path& workspace,
+    const std::filesystem::path& candidate) noexcept {
+    std::error_code error;
+    const auto canonical_workspace =
+        std::filesystem::weakly_canonical(workspace, error);
+    if (error) return false;
+    const auto canonical_candidate =
+        std::filesystem::weakly_canonical(candidate, error);
+    if (error) return false;
+    const auto relative =
+        canonical_candidate.lexically_relative(canonical_workspace);
+    if (relative.empty() || relative.is_absolute()) return false;
+    const auto first = relative.begin();
+    return first != relative.end() && first->string() != "..";
+}
 
 WorkspaceMetadata::WorkspaceMetadata(const std::string& workspace_path)
     : workspace_path_(workspace_path)
@@ -83,14 +156,16 @@ bool WorkspaceMetadata::initialize() {
         return false;
     }
 
-    // Load existing index or create new one
-    if (!load_index()) {
+    // A present-but-invalid index is an error; never overwrite it silently.
+    std::error_code index_error;
+    const bool index_exists = std::filesystem::exists(index_path_, index_error);
+    if (index_error) return false;
+    if (index_exists) {
+        if (!load_index()) return false;
+    } else {
         std::cout << "Creating new workspace index" << std::endl;
         index_.clear();
-        if (!save_index()) {
-            std::cerr << "Failed to create initial index" << std::endl;
-            return false;
-        }
+        if (!save_index()) return false;
     }
 
     return true;
@@ -107,22 +182,31 @@ bool WorkspaceMetadata::model_exists(const std::string& model_name, const std::s
 
 ModelMetadata WorkspaceMetadata::get_model_metadata(const std::string& model_name, const std::string& quant_type) const {
     ModelMetadata metadata;
+    if (!is_safe_workspace_component(model_name) ||
+        !is_safe_workspace_component(quant_type)) {
+        return metadata;
+    }
 
     // Find entry in index
     for (const auto& entry : index_) {
         if (entry.name == model_name && entry.quant_type == quant_type) {
-            // Load metadata from JSON files
-            std::string model_dir = get_model_dir(model_name, quant_type);
-            std::string metadata_path = model_dir + "/metadata.json";
-            std::string tensors_path = model_dir + "/tensors.json";
+            const std::filesystem::path relative_metadata(entry.metadata_path);
+            if (!is_safe_metadata_path(relative_metadata, model_name, quant_type)) {
+                return metadata;
+            }
+            const auto metadata_path =
+                std::filesystem::path(workspace_path_) / relative_metadata;
+            const auto tensors_path = metadata_path.parent_path() / "tensors.json";
 
-            if (!load_model_json(metadata_path, metadata)) {
-                std::cerr << "Failed to load model metadata from " << metadata_path << std::endl;
+            if (!is_path_within_workspace(workspace_path_, metadata_path) ||
+                !is_path_within_workspace(workspace_path_, tensors_path) ||
+                !load_model_json(metadata_path.string(), metadata)) {
+                std::cerr << "Failed to load model metadata from " << metadata_path.string() << std::endl;
                 return metadata;
             }
 
-            if (!load_tensors_json(tensors_path, metadata.tensors)) {
-                std::cerr << "Failed to load tensor metadata from " << tensors_path << std::endl;
+            if (!load_tensors_json(tensors_path.string(), metadata.tensors)) {
+                std::cerr << "Failed to load tensor metadata from " << tensors_path.string() << std::endl;
                 return metadata;
             }
 
@@ -134,32 +218,58 @@ ModelMetadata WorkspaceMetadata::get_model_metadata(const std::string& model_nam
 }
 
 bool WorkspaceMetadata::save_model_metadata(const ModelMetadata& metadata) {
-    // Create model directory
-    std::string model_dir = get_model_dir(metadata.name, metadata.quant_type);
-    std::filesystem::create_directories(model_dir);
+    if (!is_safe_workspace_component(metadata.name) ||
+        !is_safe_workspace_component(metadata.quant_type)) {
+        std::cerr << "Refusing unsafe model metadata path components" << std::endl;
+        return false;
+    }
 
-    // Save metadata JSON
-    std::string metadata_path = model_dir + "/metadata.json";
-    if (!save_model_json(metadata_path, metadata)) {
+    const auto nonce =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto relative_generation =
+        std::filesystem::path(metadata.name) / metadata.quant_type /
+        "generations" / std::to_string(nonce);
+    const auto generation_dir =
+        std::filesystem::path(workspace_path_) / relative_generation;
+    if (!is_path_within_workspace(workspace_path_, generation_dir)) {
+        std::cerr << "Refusing metadata generation outside workspace" << std::endl;
+        return false;
+    }
+    std::error_code directory_error;
+    std::filesystem::create_directories(generation_dir, directory_error);
+    if (directory_error) return false;
+
+    const auto metadata_path = generation_dir / "metadata.json";
+    const auto tensors_path = generation_dir / "tensors.json";
+    if (!is_path_within_workspace(workspace_path_, metadata_path) ||
+        !is_path_within_workspace(workspace_path_, tensors_path)) {
+        std::cerr << "Refusing metadata files outside workspace" << std::endl;
+        return false;
+    }
+    if (!save_model_json(metadata_path.string(), metadata)) {
         std::cerr << "Failed to save model metadata" << std::endl;
+        std::filesystem::remove_all(generation_dir, directory_error);
         return false;
     }
 
-    // Save tensors JSON
-    std::string tensors_path = model_dir + "/tensors.json";
-    if (!save_tensors_json(tensors_path, metadata.tensors)) {
+    if (!save_tensors_json(tensors_path.string(), metadata.tensors)) {
         std::cerr << "Failed to save tensor metadata" << std::endl;
+        std::filesystem::remove_all(generation_dir, directory_error);
         return false;
     }
 
-    // Update index
+    const auto previous_index = index_;
+    std::filesystem::path previous_metadata_path;
     bool found = false;
     for (auto& entry : index_) {
         if (entry.name == metadata.name && entry.quant_type == metadata.quant_type) {
+            previous_metadata_path = entry.metadata_path;
             entry.tensor_count = metadata.tensor_count;
             entry.total_size_bytes = metadata.total_size_bytes;
             entry.loaded_timestamp = metadata.loaded_timestamp;
             entry.gguf_path = metadata.gguf_path;
+            entry.metadata_path =
+                (relative_generation / "metadata.json").generic_string();
             found = true;
             break;
         }
@@ -173,14 +283,35 @@ bool WorkspaceMetadata::save_model_metadata(const ModelMetadata& metadata) {
         entry.tensor_count = metadata.tensor_count;
         entry.total_size_bytes = metadata.total_size_bytes;
         entry.loaded_timestamp = metadata.loaded_timestamp;
-        entry.metadata_path = metadata.name + "/" + metadata.quant_type + "/metadata.json";
+        entry.metadata_path =
+            (relative_generation / "metadata.json").generic_string();
         index_.push_back(entry);
     }
 
-    return save_index();
+    if (!save_index()) {
+        index_ = previous_index;
+        std::filesystem::remove_all(generation_dir, directory_error);
+        return false;
+    }
+
+    if (!previous_metadata_path.empty()) {
+        const auto previous_generation =
+            (std::filesystem::path(workspace_path_) / previous_metadata_path).parent_path();
+        if (previous_generation.parent_path().filename() == "generations" &&
+            previous_generation != generation_dir) {
+            std::filesystem::remove_all(previous_generation, directory_error);
+        }
+    }
+    return true;
 }
 
 bool WorkspaceMetadata::remove_model(const std::string& model_name, const std::string& quant_type) {
+    if (!is_safe_workspace_component(model_name) ||
+        !is_safe_workspace_component(quant_type)) {
+        return false;
+    }
+
+    const auto previous_index = index_;
     // Remove from index
     auto it = std::remove_if(index_.begin(), index_.end(),
         [&](const WorkspaceIndexEntry& entry) {
@@ -192,17 +323,21 @@ bool WorkspaceMetadata::remove_model(const std::string& model_name, const std::s
     }
 
     index_.erase(it, index_.end());
-
-    // Delete directory
-    std::string model_dir = get_model_dir(model_name, quant_type);
-    try {
-        std::filesystem::remove_all(model_dir);
-    } catch (const std::exception& e) {
-        std::cerr << "Failed to remove model directory: " << e.what() << std::endl;
+    if (!save_index()) {
+        index_ = previous_index;
         return false;
     }
 
-    return save_index();
+    // Persist removal before cleanup so a failed index write never destroys
+    // the only copy of model data.
+    std::error_code remove_error;
+    std::filesystem::remove_all(get_model_dir(model_name, quant_type), remove_error);
+    if (remove_error) {
+        std::cerr << "Failed to clean removed model directory: "
+                  << remove_error.message() << std::endl;
+        return false;
+    }
+    return true;
 }
 
 std::vector<WorkspaceIndexEntry> WorkspaceMetadata::list_models() const {
@@ -252,12 +387,16 @@ std::string WorkspaceMetadata::extract_quant_type(const std::string& gguf_path) 
 
     // Convert filename to uppercase for case-insensitive matching
     std::string upper_filename = filename;
-    std::transform(upper_filename.begin(), upper_filename.end(), upper_filename.begin(), ::toupper);
+    std::transform(
+        upper_filename.begin(), upper_filename.end(), upper_filename.begin(),
+        [](unsigned char character) { return static_cast<char>(std::toupper(character)); });
 
     for (const auto& pattern : patterns) {
         // Check if pattern exists in uppercase filename
         std::string upper_pattern = pattern;
-        std::transform(upper_pattern.begin(), upper_pattern.end(), upper_pattern.begin(), ::toupper);
+        std::transform(
+            upper_pattern.begin(), upper_pattern.end(), upper_pattern.begin(),
+            [](unsigned char character) { return static_cast<char>(std::toupper(character)); });
 
         size_t pos = upper_filename.find(upper_pattern);
         if (pos != std::string::npos) {
@@ -298,103 +437,64 @@ std::string WorkspaceMetadata::extract_model_name(const std::string& gguf_path) 
 // Private helper methods
 
 bool WorkspaceMetadata::load_index() {
-    std::cout << "  [DEBUG] Loading index from: " << index_path_ << std::endl;
+    if (!is_path_within_workspace(workspace_path_, index_path_) ||
+        !is_bounded_regular_file(index_path_)) {
+        return false;
+    }
     std::ifstream file(index_path_);
-    if (!file.is_open()) {
-        std::cout << "  [DEBUG] Index file does not exist" << std::endl;
+    if (!file) return false;
+    try {
+        const auto root = json::parse(file);
+        if (!root.is_object() || root.value("version", 0) != 1 ||
+            !root.contains("models") || !root["models"].is_array()) {
+            return false;
+        }
+        std::vector<WorkspaceIndexEntry> parsed;
+        parsed.reserve(root["models"].size());
+        for (const auto& item : root["models"]) {
+            if (!item.is_object()) return false;
+            WorkspaceIndexEntry entry{
+                item.at("name").get<std::string>(),
+                item.at("quant_type").get<std::string>(),
+                item.at("gguf_path").get<std::string>(),
+                item.at("tensor_count").get<std::size_t>(),
+                item.at("total_size_bytes").get<std::size_t>(),
+                item.at("loaded_timestamp").get<std::string>(),
+                item.at("metadata_path").get<std::string>()};
+            if (!is_safe_workspace_component(entry.name) ||
+                !is_safe_workspace_component(entry.quant_type) ||
+                !is_bounded_string(entry.gguf_path) ||
+                !is_bounded_string(entry.loaded_timestamp) ||
+                !is_bounded_string(entry.metadata_path) ||
+                !is_safe_metadata_path(
+                    std::filesystem::path(entry.metadata_path),
+                    entry.name,
+                    entry.quant_type)) {
+                return false;
+            }
+            parsed.push_back(std::move(entry));
+        }
+        index_ = std::move(parsed);
+        return true;
+    } catch (const json::exception&) {
         return false;
     }
-
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string json = buffer.str();
-    std::cout << "  [DEBUG] Index JSON length: " << json.length() << " bytes" << std::endl;
-
-    index_.clear();
-
-    // Simple JSON parsing (parse array of entries)
-    size_t pos = json.find("\"models\":");
-    if (pos == std::string::npos) {
-        std::cout << "  [DEBUG] '\"models\":' not found in JSON" << std::endl;
-        return true;  // Empty index
-    }
-    std::cout << "  [DEBUG] Found '\"models\":' at position " << pos << std::endl;
-
-    // Find the opening bracket (skip optional whitespace)
-    pos = json.find('[', pos);
-    if (pos == std::string::npos) {
-        std::cout << "  [DEBUG] '[' not found after '\"models\":'" << std::endl;
-        return true;  // Empty index
-    }
-    std::cout << "  [DEBUG] Found '[' at position " << pos << std::endl;
-
-    pos += 1;  // Skip [
-    size_t end = json.find(']', pos);
-    if (end == std::string::npos) {
-        return false;
-    }
-
-    std::string models_json = json.substr(pos, end - pos);
-
-    // Parse each model entry
-    size_t entry_start = 0;
-    while ((entry_start = models_json.find('{', entry_start)) != std::string::npos) {
-        size_t entry_end = models_json.find('}', entry_start);
-        if (entry_end == std::string::npos) break;
-
-        std::string entry_json = models_json.substr(entry_start, entry_end - entry_start + 1);
-
-        WorkspaceIndexEntry entry;
-        entry.name = read_json_string(entry_json, "name");
-        entry.quant_type = read_json_string(entry_json, "quant_type");
-        entry.gguf_path = read_json_string(entry_json, "gguf_path");
-        entry.tensor_count = read_json_number(entry_json, "tensor_count");
-        entry.total_size_bytes = read_json_number(entry_json, "total_size_bytes");
-        entry.loaded_timestamp = read_json_string(entry_json, "loaded_timestamp");
-        entry.metadata_path = read_json_string(entry_json, "metadata_path");
-
-        index_.push_back(entry);
-
-        entry_start = entry_end + 1;
-    }
-
-    std::cout << "  [DEBUG] Loaded " << index_.size() << " models from index" << std::endl;
-    return true;
 }
 
 bool WorkspaceMetadata::save_index() {
-    std::ofstream file(index_path_);
-    if (!file.is_open()) {
-        return false;
+    json models = json::array();
+    for (const auto& entry : index_) {
+        models.push_back({
+            {"name", entry.name},
+            {"quant_type", entry.quant_type},
+            {"gguf_path", entry.gguf_path},
+            {"tensor_count", entry.tensor_count},
+            {"total_size_bytes", entry.total_size_bytes},
+            {"loaded_timestamp", entry.loaded_timestamp},
+            {"metadata_path", entry.metadata_path}});
     }
-
-    file << "{\n";
-    file << "  \"version\": 1,\n";
-    file << "  \"models\": [\n";
-
-    for (size_t i = 0; i < index_.size(); i++) {
-        const auto& entry = index_[i];
-
-        file << "    {\n";
-        file << "      \"name\": \"" << escape_json_string(entry.name) << "\",\n";
-        file << "      \"quant_type\": \"" << escape_json_string(entry.quant_type) << "\",\n";
-        file << "      \"gguf_path\": \"" << escape_json_string(entry.gguf_path) << "\",\n";
-        file << "      \"tensor_count\": " << entry.tensor_count << ",\n";
-        file << "      \"total_size_bytes\": " << entry.total_size_bytes << ",\n";
-        file << "      \"loaded_timestamp\": \"" << escape_json_string(entry.loaded_timestamp) << "\",\n";
-        file << "      \"metadata_path\": \"" << escape_json_string(entry.metadata_path) << "\"\n";
-        file << "    }";
-
-        if (i < index_.size() - 1) {
-            file << ",";
-        }
-        file << "\n";
-    }
-
-    file << "  ]\n";
-    file << "}\n";
-
-    return file.good();
+    return atomic_write_text(
+        index_path_, json{{"version", 1}, {"models", std::move(models)}}.dump(2) + "\n");
 }
 
 bool WorkspaceMetadata::create_directory_structure() {
@@ -412,136 +512,108 @@ std::string WorkspaceMetadata::get_model_dir(const std::string& model_name, cons
 }
 
 bool WorkspaceMetadata::load_model_json(const std::string& path, ModelMetadata& metadata) const {
+    if (!is_bounded_regular_file(path)) {
+        return false;
+    }
     std::ifstream file(path);
     if (!file.is_open()) {
         return false;
     }
 
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string json = buffer.str();
-
-    metadata.name = read_json_string(json, "name");
-    metadata.gguf_path = read_json_string(json, "gguf_path");
-    metadata.gguf_hash = read_json_string(json, "gguf_hash");
-    metadata.quant_type = read_json_string(json, "quant_type");
-    metadata.architecture = read_json_string(json, "architecture");
-    metadata.tensor_count = read_json_number(json, "tensor_count");
-    metadata.total_size_bytes = read_json_number(json, "total_size_bytes");
-    metadata.vocab_size = read_json_number(json, "vocab_size");
-    metadata.context_length = read_json_number(json, "context_length");
-    metadata.embedding_length = read_json_number(json, "embedding_length");
-    metadata.layer_count = read_json_number(json, "layer_count");
-    metadata.loaded_timestamp = read_json_string(json, "loaded_timestamp");
-
-    return true;
+    try {
+        const auto value = json::parse(file);
+        ModelMetadata parsed;
+        parsed.name = value.at("name").get<std::string>();
+        parsed.gguf_path = value.at("gguf_path").get<std::string>();
+        parsed.gguf_hash = value.at("gguf_hash").get<std::string>();
+        parsed.quant_type = value.at("quant_type").get<std::string>();
+        parsed.architecture = value.at("architecture").get<std::string>();
+        parsed.tensor_count = value.at("tensor_count").get<std::size_t>();
+        parsed.total_size_bytes = value.at("total_size_bytes").get<std::size_t>();
+        parsed.vocab_size = value.at("vocab_size").get<std::size_t>();
+        parsed.context_length = value.at("context_length").get<std::size_t>();
+        parsed.embedding_length = value.at("embedding_length").get<std::size_t>();
+        parsed.layer_count = value.at("layer_count").get<std::size_t>();
+        parsed.loaded_timestamp = value.at("loaded_timestamp").get<std::string>();
+        if (!is_safe_workspace_component(parsed.name) ||
+            !is_safe_workspace_component(parsed.quant_type) ||
+            !is_bounded_string(parsed.gguf_path) ||
+            !is_bounded_string(parsed.gguf_hash) ||
+            !is_bounded_string(parsed.architecture) ||
+            !is_bounded_string(parsed.loaded_timestamp)) {
+            return false;
+        }
+        metadata = std::move(parsed);
+        return true;
+    } catch (const json::exception&) {
+        return false;
+    }
 }
 
 bool WorkspaceMetadata::save_model_json(const std::string& path, const ModelMetadata& metadata) {
-    std::ofstream file(path);
-    if (!file.is_open()) {
-        return false;
-    }
-
-    file << "{\n";
-    file << "  \"name\": \"" << escape_json_string(metadata.name) << "\",\n";
-    file << "  \"gguf_path\": \"" << escape_json_string(metadata.gguf_path) << "\",\n";
-    file << "  \"gguf_hash\": \"" << escape_json_string(metadata.gguf_hash) << "\",\n";
-    file << "  \"quant_type\": \"" << escape_json_string(metadata.quant_type) << "\",\n";
-    file << "  \"architecture\": \"" << escape_json_string(metadata.architecture) << "\",\n";
-    file << "  \"tensor_count\": " << metadata.tensor_count << ",\n";
-    file << "  \"total_size_bytes\": " << metadata.total_size_bytes << ",\n";
-    file << "  \"vocab_size\": " << metadata.vocab_size << ",\n";
-    file << "  \"context_length\": " << metadata.context_length << ",\n";
-    file << "  \"embedding_length\": " << metadata.embedding_length << ",\n";
-    file << "  \"layer_count\": " << metadata.layer_count << ",\n";
-    file << "  \"loaded_timestamp\": \"" << escape_json_string(metadata.loaded_timestamp) << "\"\n";
-    file << "}\n";
-
-    return file.good();
+    return atomic_write_text(path, json{
+        {"name", metadata.name},
+        {"gguf_path", metadata.gguf_path},
+        {"gguf_hash", metadata.gguf_hash},
+        {"quant_type", metadata.quant_type},
+        {"architecture", metadata.architecture},
+        {"tensor_count", metadata.tensor_count},
+        {"total_size_bytes", metadata.total_size_bytes},
+        {"vocab_size", metadata.vocab_size},
+        {"context_length", metadata.context_length},
+        {"embedding_length", metadata.embedding_length},
+        {"layer_count", metadata.layer_count},
+        {"loaded_timestamp", metadata.loaded_timestamp}}.dump(2) + "\n");
 }
 
 bool WorkspaceMetadata::load_tensors_json(const std::string& path, std::vector<TensorLocation>& tensors) const {
+    if (!is_bounded_regular_file(path)) {
+        return false;
+    }
     std::ifstream file(path);
     if (!file.is_open()) {
         return false;
     }
 
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string json = buffer.str();
-
-    tensors.clear();
-
-    // Parse tensor array
-    size_t pos = json.find("\"tensors\":[");
-    if (pos == std::string::npos) {
-        return true;  // Empty tensors
-    }
-
-    pos += 11;  // Skip "tensors":[
-    size_t end = json.find(']', pos);
-    if (end == std::string::npos) {
+    try {
+        const auto value = json::parse(file);
+        if (!value.is_object() || !value.contains("tensors") ||
+            !value["tensors"].is_array()) return false;
+        std::vector<TensorLocation> parsed;
+        parsed.reserve(value["tensors"].size());
+        for (const auto& item : value["tensors"]) {
+            TensorLocation tensor{
+                item.at("name").get<std::string>(),
+                item.at("vpid_offset").get<std::size_t>(),
+                item.at("size_bytes").get<std::size_t>(),
+                item.at("element_count").get<std::size_t>(),
+                item.at("original_type").get<std::string>(),
+                item.at("dequant_type").get<std::string>()};
+            if (!is_bounded_string(tensor.name) ||
+                !is_bounded_string(tensor.original_type) ||
+                !is_bounded_string(tensor.dequant_type)) return false;
+            parsed.push_back(std::move(tensor));
+        }
+        tensors = std::move(parsed);
+        return true;
+    } catch (const json::exception&) {
         return false;
     }
-
-    std::string tensors_json = json.substr(pos, end - pos);
-
-    // Parse each tensor entry
-    size_t entry_start = 0;
-    while ((entry_start = tensors_json.find('{', entry_start)) != std::string::npos) {
-        size_t entry_end = tensors_json.find('}', entry_start);
-        if (entry_end == std::string::npos) break;
-
-        std::string entry_json = tensors_json.substr(entry_start, entry_end - entry_start + 1);
-
-        TensorLocation tensor;
-        tensor.name = read_json_string(entry_json, "name");
-        tensor.vpid_offset = read_json_number(entry_json, "vpid_offset");
-        tensor.size_bytes = read_json_number(entry_json, "size_bytes");
-        tensor.element_count = read_json_number(entry_json, "element_count");
-        tensor.original_type = read_json_string(entry_json, "original_type");
-        tensor.dequant_type = read_json_string(entry_json, "dequant_type");
-
-        tensors.push_back(tensor);
-
-        entry_start = entry_end + 1;
-    }
-
-    return true;
 }
 
 bool WorkspaceMetadata::save_tensors_json(const std::string& path, const std::vector<TensorLocation>& tensors) {
-    std::ofstream file(path);
-    if (!file.is_open()) {
-        return false;
+    json values = json::array();
+    for (const auto& tensor : tensors) {
+        values.push_back({
+            {"name", tensor.name},
+            {"vpid_offset", tensor.vpid_offset},
+            {"size_bytes", tensor.size_bytes},
+            {"element_count", tensor.element_count},
+            {"original_type", tensor.original_type},
+            {"dequant_type", tensor.dequant_type}});
     }
-
-    file << "{\n";
-    file << "  \"tensors\": [\n";
-
-    for (size_t i = 0; i < tensors.size(); i++) {
-        const auto& tensor = tensors[i];
-
-        file << "    {\n";
-        file << "      \"name\": \"" << escape_json_string(tensor.name) << "\",\n";
-        file << "      \"vpid_offset\": " << tensor.vpid_offset << ",\n";
-        file << "      \"size_bytes\": " << tensor.size_bytes << ",\n";
-        file << "      \"element_count\": " << tensor.element_count << ",\n";
-        file << "      \"original_type\": \"" << escape_json_string(tensor.original_type) << "\",\n";
-        file << "      \"dequant_type\": \"" << escape_json_string(tensor.dequant_type) << "\"\n";
-        file << "    }";
-
-        if (i < tensors.size() - 1) {
-            file << ",";
-        }
-        file << "\n";
-    }
-
-    file << "  ]\n";
-    file << "}\n";
-
-    return file.good();
+    return atomic_write_text(
+        path, json{{"tensors", std::move(values)}}.dump(2) + "\n");
 }
 
 } // namespace snapllm

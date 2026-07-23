@@ -3,7 +3,7 @@
   <img src="logo_files/FULL_TRIMMED_transparent.png" alt="SnapLLM Logo" width="400"/>
 </p>
 
-<h1 align="center">High-Performance Multi-Model LLM Inference Engine with Sub-Millisecond Model Switching, </br> Switch models in a snap! with Desktop UI, CLI & API</h1>
+<h1 align="center">Local Multi-Model LLM Inference with Desktop UI, CLI & API</h1>
 
 <p align="center">
   <strong>Arxiv Paper Link to be added</strong>
@@ -118,7 +118,7 @@ build_cpu.bat
 **Linux (GPU):**
 ```bash
 chmod +x build.sh
-./build.sh --cuda
+./build.sh gpu
 ```
 
 **Linux (CPU only):**
@@ -153,12 +153,12 @@ build_gpu\bin\snapllm.exe --server --port 6930
 You should see:
 ```
 ================================================================
-  SnapLLM HTTP Server v1.0.0
+  SnapLLM HTTP Server v1.3.1
 ================================================================
-  Listening on: http://0.0.0.0:6930
+  Listening on: http://127.0.0.1:6930
   Workspace:    C:\Users\YourName\SnapLLM_Workspace  (Windows)
                 /home/yourname/SnapLLM_Workspace     (Linux)
-  CORS:         enabled
+  Browser origins: strict allowlist
 ================================================================
 ```
 
@@ -167,6 +167,10 @@ You should see:
 > - **Linux/macOS**: `~/SnapLLM_Workspace` (e.g., `/home/yourname/SnapLLM_Workspace`)
 >
 > To use a custom location: `snapllm --server --workspace-root "D:\MyWorkspace"`
+>
+> The default loopback bind does not require a key. Before binding to any
+> non-loopback address, set `SNAPLLM_API_KEY` to 32–4096 visible ASCII
+> characters. See [Network access and Docker](#network-access-and-docker).
 
 ### Verify Server is Running
 
@@ -176,8 +180,47 @@ curl http://localhost:6930/health
 
 Response:
 ```json
-{"status": "healthy", "version": "1.0.0"}
+{"status": "ok", "version": "1.3.1"}
 ```
+
+---
+
+## Network Access and Docker
+
+SnapLLM defaults to `127.0.0.1`. Keep that default unless another machine
+must connect.
+
+For a non-loopback listener, generate a random API key with at least 32 visible
+ASCII characters and provide it only through the environment:
+
+```bash
+export SNAPLLM_API_KEY='replace-with-a-random-value-at-least-32-characters'
+./build_gpu/bin/snapllm --server --host 0.0.0.0 --port 6930
+
+curl -H "Authorization: Bearer $SNAPLLM_API_KEY" \
+  http://localhost:6930/api/v1/models
+```
+
+`X-API-Key` is also accepted. `/` and `/health` are public; other API routes
+require the configured key. Requests with an unexpected Host are rejected.
+Browser origins are exact-match allowlisted with repeatable `--cors-origin`
+options or the comma-separated `SNAPLLM_CORS_ORIGINS` environment variable.
+
+The included Compose configuration publishes the service only on host loopback
+and requires `SNAPLLM_API_KEY`:
+
+```bash
+mkdir -p workspace models
+export SNAPLLM_API_KEY='replace-with-a-random-value-at-least-32-characters'
+docker compose up --build
+```
+
+The image runs as an unprivileged user. Compose mounts `./models` read-only and
+`./workspace` read/write, drops Linux capabilities, and uses a read-only root
+filesystem. API-supplied model and workspace paths are canonicalized and must
+remain under their configured roots. To expose the published port beyond the
+host, change the Compose port mapping deliberately and place TLS plus network
+access controls in front of SnapLLM.
 
 ---
 
@@ -281,7 +324,8 @@ curl -X POST http://localhost:6930/v1/chat/completions \
 
 ## Multi-Model Switching
 
-This is SnapLLM's superpower - switch between models in **<1ms**!
+SnapLLM can select another already-loaded model without reloading its weights.
+Observed latency depends on residency, hardware, and memory pressure.
 
 ### Load Multiple Models
 
@@ -297,10 +341,10 @@ curl -X POST http://localhost:6930/api/v1/models/load \
   -d '{"model_id": "coder", "file_path": "/models/codellama-7b.gguf"}'
 ```
 
-### Switch Models Instantly
+### Select a Loaded Model
 
 ```bash
-# Switch to coder model (<1ms!)
+# Select the loaded coder model
 curl -X POST http://localhost:6930/api/v1/models/switch \
   -H "Content-Type: application/json" \
   -d '{"model_id": "coder"}'
@@ -350,12 +394,12 @@ The SnapLLM Desktop UI provides a beautiful web interface for managing models an
 
 ### Prerequisites for UI
 
-- **Node.js 18+** - Download from https://nodejs.org/
+- **Node.js 20.19+** - Download from https://nodejs.org/
 - **npm** (comes with Node.js)
 
 Verify installation:
 ```bash
-node --version   # Should show v18.x.x or higher
+node --version   # Should show v20.19.x or higher
 npm --version    # Should show 9.x.x or higher
 ```
 
@@ -377,18 +421,18 @@ bin\snapllm.exe --server --port 6930 --load-model mymodel "C:\Models\llama-3-8b.
 Wait until you see:
 ```
 ================================================================
-  SnapLLM HTTP Server v1.0.0
+  SnapLLM HTTP Server v1.3.1
 ================================================================
-  Listening on: http://0.0.0.0:6930
+  Listening on: http://127.0.0.1:6930
   Workspace:    C:\Users\YourName\SnapLLM_Workspace
-  CORS:         enabled
+  Browser origins: strict allowlist
 ================================================================
 ```
 
 Verify the backend is running:
 ```bash
 curl http://localhost:6930/health
-# Should return: {"status":"ok","version":"1.0.0"...}
+# Should return: {"status":"ok","version":"1.3.1"...}
 ```
 
 ### Step 2: Start the Desktop UI
@@ -429,10 +473,10 @@ http://localhost:9780
 | **Dashboard** | System overview, health metrics | View GPU/CPU usage, loaded models |
 | **Chat** | Interactive chat interface | Select model, type messages, get responses |
 | **Models** | Model management | Load new models, view loaded models, scan folders |
-| **Quick Switch** | <1ms model switching | Click to instantly switch between loaded models |
+| **Quick Switch** | Loaded-model selection | Select another resident model |
 | **Images** | Stable Diffusion generation | Enter prompt, generate images (requires SD model) |
 | **Vision** | Multimodal analysis | Upload image, ask questions about it |
-| **Contexts** | vPID L2 KV cache | Ingest documents for O(1) RAG queries |
+| **Contexts** | vPID L2 KV cache | Ingest documents for indexed cache lookup |
 | **A/B Compare** | Side-by-side comparison | Compare responses from 2 models |
 | **Playground** | API testing | Test raw API calls |
 | **Metrics** | Performance analytics | View tokens/sec, latency, memory usage |
@@ -455,7 +499,7 @@ http://localhost:9780
 
 1. **Load multiple models** via Models page
 2. **Go to Quick Switch page** (sidebar → Quick Switch)
-3. **Click any model card** to switch instantly (<1ms!)
+3. **Click any loaded model card** to select it
 4. **Go to Chat** and chat with the active model
 5. **Switch again** without reloading - that's the SnapLLM magic!
 
@@ -500,7 +544,7 @@ npm run dev &
 - Verify model loaded successfully
 
 **"npm install" fails**
-- Update Node.js to version 18+
+- Update Node.js to version 20.19+
 - Delete `node_modules` folder and try again
 - Run `npm cache clean --force`
 
@@ -524,7 +568,8 @@ snapllm [OPTIONS]
 |--------|-------------|---------|
 | `--server` | Start HTTP server mode | - |
 | `--port PORT` | Server port | 6930 |
-| `--host HOST` | Bind address | 0.0.0.0 |
+| `--host HOST` | Bind address | 127.0.0.1 |
+| `--cors-origin ORIGIN` | Allow one exact browser origin (repeatable) | - |
 | `--workspace-root PATH` | Workspace directory | ~/SnapLLM_Workspace |
 | `--load-model NAME PATH` | Pre-load model (repeatable) | - |
 
@@ -678,8 +723,8 @@ bin\snapllm.exe --load-model test "C:\Models\test.gguf" --stats
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `SNAPLLM_PORT` | Default server port | 6930 |
-| `SNAPLLM_HOST` | Default bind address | 0.0.0.0 |
-| `SNAPLLM_WORKSPACE` | Default workspace path | ~/SnapLLM_Workspace |
+| `SNAPLLM_API_KEY` | Runtime-only API key; required off loopback | Unset |
+| `SNAPLLM_CORS_ORIGINS` | Comma-separated exact browser origins | Unset |
 | `CUDA_VISIBLE_DEVICES` | GPU selection | 0 |
 
 ### Exit Codes
@@ -726,7 +771,9 @@ bin\snapllm.exe --load-model test "C:\Models\test.gguf" --stats
 ### Can't Connect from Browser
 
 **CORS errors**
-- Server runs with CORS enabled by default
+- Browser origins are exact-match allowlisted; add trusted origins with
+  `--cors-origin` or `SNAPLLM_CORS_ORIGINS`
+- Confirm the request Host matches the configured listener
 - Check firewall settings
 
 ---

@@ -1,33 +1,96 @@
 name: Release
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing signed-off release tag (for example v1.3.1)
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag }}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.verify-tag.outputs.commit_sha }}
+    steps:
+      - name: Validate tag format
+        shell: bash
+        run: |
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Release tag must match vMAJOR.MINOR.PATCH"
+            exit 1
+          }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Verify signed release tag
+        id: verify-tag
+        shell: bash
+        run: |
+          git verify-tag "${RELEASE_TAG}"
+          echo "commit_sha=$(git rev-parse "${RELEASE_TAG}^{commit}")" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Verify source and tag versions
+        shell: bash
+        run: |
+          node scripts/check_versions.mjs
+          SOURCE_VERSION="$(sed -nE 's/.*project\(SnapLLM VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt)"
+          test "v${SOURCE_VERSION}" = "${RELEASE_TAG}"
+
   build-ui:
     runs-on: ubuntu-latest
+    needs: [validate-release]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
-      - uses: actions/setup-node@v4
+          ref: ${{ needs.validate-release.outputs.commit_sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 18
+          node-version: 24
           cache: npm
           cache-dependency-path: desktop-app/package-lock.json
       - name: Install dependencies
         run: npm --prefix desktop-app ci
+      - name: Dependency audit
+        run: npm --prefix desktop-app audit
+      - name: Unit tests
+        run: npm --prefix desktop-app test -- --run
+      - name: Lint
+        run: npm --prefix desktop-app run lint
+      - name: Type check
+        run: npm --prefix desktop-app exec tsc -- --noEmit
       - name: Build Web UI
         run: npm --prefix desktop-app run build
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.0-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Rust formatting
+        run: cargo fmt --manifest-path desktop-app/src-tauri/Cargo.toml --check
+      - name: Rust check and tests
+        run: |
+          cargo check --manifest-path desktop-app/src-tauri/Cargo.toml --locked
+          cargo test --manifest-path desktop-app/src-tauri/Cargo.toml --locked
+      - name: Install pinned RustSec auditor
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Rust dependency audit
+        run: cargo audit --file desktop-app/src-tauri/Cargo.lock
       - name: Verify build
         run: |
           test -f desktop-app/dist/index.html || { echo "index.html not found"; exit 1; }
           ls -lhR desktop-app/dist/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: web-ui
           path: desktop-app/dist/
@@ -35,17 +98,18 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-    needs: [build-ui]
+    needs: [validate-release, build-ui]
     steps:
       - name: Enable long paths
         run: git config --global core.longpaths true
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
+          ref: ${{ needs.validate-release.outputs.commit_sha }}
       - name: Extract version
         id: version
         shell: bash
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
       - name: Configure
         run: >-
           cmake -S . -B build_cpu -G "Visual Studio 17 2022" -A x64
@@ -57,6 +121,11 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build_cpu --config Release -j 2
+      - name: Regression tests
+        run: ctest --test-dir build_cpu -C Release --output-on-failure
+      - name: HTTP security integration
+        shell: pwsh
+        run: tests/server_security_integration.ps1 -ServerExecutable build_cpu/bin/snapllm.exe
       - name: Verify binary
         shell: pwsh
         run: |
@@ -69,7 +138,7 @@ jobs:
           Write-Host "Binary found: build_cpu\bin\snapllm.exe"
       - name: Smoke test
         run: powershell -File scripts/ci_smoke_test.ps1 -SnapllmPath build_cpu\bin\snapllm.exe
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: web-ui
           path: web-ui-dist/
@@ -113,21 +182,21 @@ jobs:
           pause
           "@ | Set-Content "$dir\run_server.bat"
 
-          @"
-          @echo off
-          echo.
-          echo  SnapLLM Server with Model
-          echo  =========================
-          echo.
-          set /p MODEL_PATH="Enter path to your .gguf model file: "
-          set /p MODEL_NAME="Enter a name for this model: "
-          echo.
-          echo Starting server with model: %MODEL_NAME%
-          echo Web UI will be available at: http://localhost:6930/
-          cd /d "%~dp0"
-          bin\snapllm.exe --server --port 6930 --ui-dir ui --load-model %MODEL_NAME% "%MODEL_PATH%"
-          pause
-          "@ | Set-Content "$dir\run_server_with_model.bat"
+          @'
+          $ErrorActionPreference = "Stop"
+          Set-Location $PSScriptRoot
+          $modelPath = Read-Host "Enter path to your .gguf model file"
+          $modelName = Read-Host "Enter a name for this model"
+          if ($modelName -notmatch '^[A-Za-z0-9_.-]{1,128}$') {
+            throw "Model name may contain only letters, digits, dot, underscore, and hyphen."
+          }
+          if ([IO.Path]::GetExtension($modelPath) -ine ".gguf" -or -not (Test-Path -LiteralPath $modelPath -PathType Leaf)) {
+            throw "Model path must identify an existing .gguf file."
+          }
+          Write-Host "Starting server with model: $modelName"
+          Write-Host "Web UI will be available at: http://localhost:6930/"
+          & "$PSScriptRoot\bin\snapllm.exe" --server --port 6930 --ui-dir ui --load-model $modelName $modelPath
+          '@ | Set-Content "$dir\run_server_with_model.ps1"
 
           # Version file
           $env:VERSION | Set-Content "$dir\VERSION"
@@ -135,7 +204,16 @@ jobs:
           # Create ZIP
           Compress-Archive -Path "$dir\*" -DestinationPath "release-pkg\$rel.zip" -Force
           Write-Host "Created release-pkg\$rel.zip"
-      - uses: actions/upload-artifact@v4
+      - name: Smoke packaged archive
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem release-pkg/*.zip | Select-Object -First 1
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath release-smoke
+          $binary = Get-ChildItem release-smoke -Recurse -Filter snapllm.exe | Select-Object -First 1
+          $actual = (& $binary.FullName --version).Trim()
+          $expected = "SnapLLM $($env:RELEASE_TAG.TrimStart('v'))"
+          if ($actual -ne $expected) { throw "Packaged version '$actual' did not match '$expected'" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-release
           path: release-pkg/*.zip
@@ -143,14 +221,15 @@ jobs:
 
   build-linux:
     runs-on: ubuntu-latest
-    needs: [build-ui]
+    needs: [validate-release, build-ui]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
+          ref: ${{ needs.validate-release.outputs.commit_sha }}
       - name: Extract version
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
       - name: Configure
         run: >-
           cmake -S . -B build_cpu
@@ -162,11 +241,13 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build_cpu -j 2
+      - name: Regression tests
+        run: ctest --test-dir build_cpu --output-on-failure
       - name: Smoke test
         run: |
           chmod +x scripts/ci_smoke_test.sh
           bash scripts/ci_smoke_test.sh build_cpu/bin/snapllm
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: web-ui
           path: web-ui-dist/
@@ -233,7 +314,15 @@ jobs:
           cd release-pkg
           tar -czvf "${REL}.tar.gz" "${REL}"
           echo "Created release-pkg/${REL}.tar.gz"
-      - uses: actions/upload-artifact@v4
+      - name: Smoke packaged archive
+        shell: bash
+        run: |
+          mkdir release-smoke
+          tar -xzf release-pkg/*.tar.gz -C release-smoke
+          BINARY="$(find release-smoke -type f -path '*/bin/snapllm' -print -quit)"
+          test -n "${BINARY}"
+          test "$("${BINARY}" --version)" = "SnapLLM ${RELEASE_TAG#v}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: linux-release
           path: release-pkg/*.tar.gz
@@ -241,14 +330,15 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
-    needs: [build-ui]
+    needs: [validate-release, build-ui]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
+          ref: ${{ needs.validate-release.outputs.commit_sha }}
       - name: Extract version
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
       - name: Configure
         run: >-
           cmake -S . -B build_cpu
@@ -260,11 +350,13 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build_cpu -j 3
+      - name: Regression tests
+        run: ctest --test-dir build_cpu --output-on-failure
       - name: Smoke test
         run: |
           chmod +x scripts/ci_smoke_test.sh
           bash scripts/ci_smoke_test.sh build_cpu/bin/snapllm
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: web-ui
           path: web-ui-dist/
@@ -331,7 +423,15 @@ jobs:
           cd release-pkg
           tar -czvf "${REL}.tar.gz" "${REL}"
           echo "Created release-pkg/${REL}.tar.gz"
-      - uses: actions/upload-artifact@v4
+      - name: Smoke packaged archive
+        shell: bash
+        run: |
+          mkdir release-smoke
+          tar -xzf release-pkg/*.tar.gz -C release-smoke
+          BINARY="$(find release-smoke -type f -path '*/bin/snapllm' -print -quit)"
+          test -n "${BINARY}"
+          test "$("${BINARY}" --version)" = "SnapLLM ${RELEASE_TAG#v}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-release
           path: release-pkg/*.tar.gz
@@ -339,20 +439,23 @@ jobs:
 
   create-release:
     runs-on: ubuntu-latest
-    needs: [build-windows, build-linux, build-macos]
+    needs: [validate-release, build-windows, build-linux, build-macos]
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+          ref: ${{ needs.validate-release.outputs.commit_sha }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: windows-release
           path: artifacts/
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: linux-release
           path: artifacts/
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: macos-release
           path: artifacts/
@@ -362,8 +465,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          gh release create "${{ github.ref_name }}" \
+          VERSION=${RELEASE_TAG#v}
+          gh release create "${RELEASE_TAG}" \
+            --target "${{ needs.validate-release.outputs.commit_sha }}" \
             --title "SnapLLM v${VERSION}" \
             --generate-notes \
             --latest \

@@ -7,7 +7,7 @@ setlocal enabledelayedexpansion
 :: This script creates a distributable release package with all necessary files.
 ::
 :: Usage: package_release.bat [version]
-:: Example: package_release.bat 1.0.0
+:: Example: package_release.bat 1.3.1
 :: ============================================================================
 
 echo.
@@ -17,12 +17,17 @@ echo  ========================================
 echo.
 
 :: Get version from argument or use default
-set VERSION=%1
-if "%VERSION%"=="" set VERSION=1.0.0
+set "VERSION=%~1"
+if "%VERSION%"=="" set "VERSION=1.3.1"
+powershell -NoProfile -Command "if ($env:VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { exit 1 }"
+if errorlevel 1 (
+    echo [ERROR] Version must match MAJOR.MINOR.PATCH.
+    exit /b 1
+)
 
-set RELEASE_NAME=snapllm-%VERSION%-windows-x64-cuda
-set RELEASE_DIR=releases\%RELEASE_NAME%
-set BUILD_DIR=build_gpu
+set "RELEASE_NAME=snapllm-%VERSION%-windows-x64-cuda"
+set "RELEASE_DIR=releases\%RELEASE_NAME%"
+set "BUILD_DIR=build_gpu"
 
 :: Check if build exists
 if not exist "%BUILD_DIR%\bin\snapllm.exe" (
@@ -37,7 +42,8 @@ echo.
 
 :: Create release directory structure
 echo [1/6] Creating directory structure...
-if exist "%RELEASE_DIR%" rmdir /s /q "%RELEASE_DIR%"
+powershell -NoProfile -Command "$root=[IO.Path]::GetFullPath((Join-Path (Get-Location) 'releases')); $target=[IO.Path]::GetFullPath((Join-Path $root $env:RELEASE_NAME)); if ([IO.Path]::GetDirectoryName($target) -ne $root) { throw 'Unsafe release target' }; if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }"
+if errorlevel 1 exit /b 1
 mkdir "%RELEASE_DIR%"
 mkdir "%RELEASE_DIR%\bin"
 mkdir "%RELEASE_DIR%\examples"
@@ -87,10 +93,20 @@ echo echo  =========================
 echo echo.
 echo set /p MODEL_PATH="Enter path to your .gguf model file: "
 echo set /p MODEL_NAME="Enter a name for this model: "
+echo powershell -NoProfile -Command "$p=$env:MODEL_PATH; if ([string]::IsNullOrWhiteSpace($p) -or $p -match '[\"&|^<^>^^%%!`r`n]' -or [IO.Path]::GetExtension($p) -ine '.gguf' -or -not [IO.Path]::IsPathFullyQualified($p) -or -not (Test-Path -LiteralPath $p -PathType Leaf)) { exit 1 }"
+echo if errorlevel 1 ^(
+echo   echo Invalid model path. Use an existing absolute .gguf path without command metacharacters.
+echo   exit /b 1
+echo ^)
+echo powershell -NoProfile -Command "if ($env:MODEL_NAME -notmatch '^[A-Za-z0-9._-]{1,128}$') { exit 1 }"
+echo if errorlevel 1 ^(
+echo   echo Invalid model name. Use 1-128 letters, digits, dots, underscores, or hyphens.
+echo   exit /b 1
+echo ^)
 echo echo.
-echo echo Starting server with model: %%MODEL_NAME%%
+echo echo Starting server with model: "%%MODEL_NAME%%"
 echo cd /d "%%~dp0"
-echo bin\snapllm.exe --server --port 6930 --load-model %%MODEL_NAME%% "%%MODEL_PATH%%"
+echo bin\snapllm.exe --server --port 6930 --load-model "%%MODEL_NAME%%" "%%MODEL_PATH%%"
 echo pause
 ) > "%RELEASE_DIR%\run_server_with_model.bat"
 

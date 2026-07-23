@@ -21,7 +21,18 @@ set(SNAPLLM_SOURCES
     validation.cpp
     workspace_metadata.cpp
     unified_model_manager.cpp
+    server_limits.cpp
     server.cpp
+    ${CMAKE_SOURCE_DIR}/external/llama.cpp/examples/gguf-hash/deps/sha256/sha256.c
+)
+
+# Security policy helpers are isolated so their unit tests do not need the
+# model runtime or third-party inference libraries.
+add_library(snapllm_server_security OBJECT server_security.cpp)
+target_include_directories(snapllm_server_security PUBLIC ${CMAKE_SOURCE_DIR}/include)
+target_compile_options(snapllm_server_security PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
 )
 
 # Add diffusion support if enabled
@@ -41,11 +52,17 @@ endif()
 # =============================================================================
 add_library(snapllm STATIC ${SNAPLLM_SOURCES})
 set_target_properties(snapllm PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(snapllm PRIVATE
+    ${CMAKE_SOURCE_DIR}/external/llama.cpp/examples/gguf-hash/deps/sha256
+    ${CMAKE_SOURCE_DIR}/external/llama.cpp/examples/gguf-hash/deps
+)
 
 # Link core dependencies
 target_link_libraries(snapllm
     PUBLIC
         llama
+    PRIVATE
+        snapllm_server_security
 )
 
 # Add diffusion library if enabled
@@ -79,6 +96,7 @@ endif()
 target_include_directories(snapllm
     PUBLIC
         ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_BINARY_DIR}/generated
         ${CMAKE_SOURCE_DIR}/external/llama.cpp/include
         ${CMAKE_SOURCE_DIR}/external/llama.cpp/ggml/include
         ${CMAKE_SOURCE_DIR}/external/llama.cpp/ggml/src
@@ -152,6 +170,82 @@ foreach(CONFIG_TYPE Release Debug RelWithDebInfo MinSizeRel)
         RUNTIME_OUTPUT_DIRECTORY_${CONFIG_TYPE_UPPER} ${CMAKE_BINARY_DIR}/bin
     )
 endforeach()
+
+# =============================================================================
+# Tests
+# =============================================================================
+if(BUILD_TESTING)
+    add_executable(snapllm_server_security_test
+        ${CMAKE_SOURCE_DIR}/tests/server_security_test.cpp
+    )
+    target_link_libraries(snapllm_server_security_test PRIVATE snapllm_server_security)
+    target_compile_options(snapllm_server_security_test PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W4>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
+    )
+    add_test(NAME server_security COMMAND snapllm_server_security_test)
+
+    add_executable(snapllm_context_persistence_test
+        ${CMAKE_SOURCE_DIR}/tests/context_persistence_test.cpp
+    )
+    target_include_directories(snapllm_context_persistence_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_options(snapllm_context_persistence_test PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W4>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
+    )
+    add_test(NAME context_persistence COMMAND snapllm_context_persistence_test)
+
+    add_executable(snapllm_server_limits_test
+        ${CMAKE_SOURCE_DIR}/tests/server_limits_test.cpp
+        server_limits.cpp
+    )
+    target_link_libraries(snapllm_server_limits_test PRIVATE snapllm_server_security)
+    target_include_directories(snapllm_server_limits_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_options(snapllm_server_limits_test PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W4>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
+    )
+    add_test(NAME server_limits COMMAND snapllm_server_limits_test)
+
+    add_executable(snapllm_context_lifecycle_test
+        ${CMAKE_SOURCE_DIR}/tests/context_lifecycle_test.cpp
+    )
+    target_link_libraries(snapllm_context_lifecycle_test PRIVATE snapllm)
+    target_include_directories(snapllm_context_lifecycle_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_options(snapllm_context_lifecycle_test PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W4>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
+    )
+    add_test(NAME context_lifecycle COMMAND snapllm_context_lifecycle_test)
+
+    add_executable(snapllm_model_lifecycle_test
+        ${CMAKE_SOURCE_DIR}/tests/model_lifecycle_test.cpp
+    )
+    target_include_directories(snapllm_model_lifecycle_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_options(snapllm_model_lifecycle_test PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W4>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
+    )
+    add_test(NAME model_lifecycle COMMAND snapllm_model_lifecycle_test)
+
+    add_executable(snapllm_workspace_metadata_security_test
+        ${CMAKE_SOURCE_DIR}/tests/workspace_metadata_security_test.cpp
+        workspace_metadata.cpp
+    )
+    target_include_directories(snapllm_workspace_metadata_security_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/external/nlohmann
+    )
+    target_compile_definitions(
+        snapllm_workspace_metadata_security_test
+        PRIVATE SNAPLLM_WORKSPACE_TEST_HOOKS=1
+    )
+    target_compile_options(snapllm_workspace_metadata_security_test PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W4>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
+    )
+    add_test(NAME workspace_metadata_security COMMAND snapllm_workspace_metadata_security_test)
+endif()
 
 # =============================================================================
 # Summary

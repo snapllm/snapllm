@@ -1,6 +1,6 @@
 // ============================================================================
 // SnapLLM - Model Quick Switcher
-// Ultra-fast <1ms model switching UI
+// Loaded-model switching UI
 // ============================================================================
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
@@ -364,7 +364,7 @@ export const ModelQuickSwitcher: React.FC<ModelQuickSwitcherProps> = ({
                 <div className="flex items-center gap-2 text-xs">
                   <Zap className="w-4 h-4 text-warning-500" />
                   <span className="text-warning-600 dark:text-warning-400 font-medium">
-                    vPID: &lt;1ms switching
+                    vPID loaded-model switching
                   </span>
                 </div>
               </div>

@@ -33,17 +33,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-ENV SNAPLLM_MODELS_PATH=/models \
-    SNAPLLM_WORKSPACE_ROOT=/workspace \
-    SNAPLLM_HOST=0.0.0.0 \
-    SNAPLLM_PORT=6930
+ENV SNAPLLM_MODELS_PATH=/models
 
 WORKDIR /app
 
-RUN mkdir -p /workspace /models
+RUN groupadd --system snapllm \
+    && useradd --system --gid snapllm --home-dir /app --shell /usr/sbin/nologin snapllm \
+    && mkdir -p /workspace /models \
+    && chown -R snapllm:snapllm /app /workspace /models
 
 COPY --from=build /src/build/bin/snapllm /usr/local/bin/snapllm
 
+USER snapllm:snapllm
+
 EXPOSE 6930
 
-CMD ["snapllm", "--server", "--host", "0.0.0.0", "--port", "6930", "--workspace-root", "/workspace"]
+CMD ["snapllm", "--server", "--host", "127.0.0.1", "--port", "6930", "--workspace-root", "/workspace"]

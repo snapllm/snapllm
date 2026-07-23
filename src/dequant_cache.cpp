@@ -17,60 +17,6 @@ DequantCache::DequantCache(std::shared_ptr<VPIDWorkspace> vpid)
 {
 }
 
-bool DequantCache::load_model(const std::string& model_name,
-                              const std::string& gguf_path,
-                              bool force_reload) {
-    std::lock_guard<std::mutex> lock(cache_mutex_);
-    
-    // Check if already loaded
-    if (!force_reload && models_.find(model_name) != models_.end()) {
-        std::cout << "Model '" << model_name << "' already loaded" << std::endl;
-        return true;
-    }
-    
-    std::cout << "Loading model: " << model_name << std::endl;
-    std::cout << "  From: " << gguf_path << std::endl;
-    
-    // Parse GGUF file
-    ModelInfo model_info;
-    model_info.name = model_name;
-    
-    if (!parse_gguf(gguf_path, model_info)) {
-        std::cerr << "Failed to parse GGUF file" << std::endl;
-        return false;
-    }
-    
-    std::cout << "  Parsed GGUF: " << model_info.tensors.size() << " tensors" << std::endl;
-    
-    // Dequantize and store each tensor
-    std::cout << "  Dequantizing tensors..." << std::endl;
-    size_t total_size = 0;
-    
-    for (auto& tensor : model_info.tensors) {
-        // TODO: In full implementation, load actual tensor data from GGUF
-        // For now, allocate space in vPID
-        
-        tensor.byte_size = tensor.num_elements * sizeof(float);
-        total_size += tensor.byte_size;
-        
-        // Allocate in vPID
-        tensor.vpid_alloc = vpid_->allocate(tensor.byte_size, tensor.name);
-        tensor.vpid_offset = tensor.vpid_alloc.offset;
-        
-        // TODO: Actual dequantization would happen here
-        // std::vector<float> dequantized = dequantize_tensor(...);
-        // vpid_->write_direct(tensor.vpid_offset, dequantized.data(), tensor.byte_size);
-    }
-    
-    std::cout << "  Total dequantized size: " << (total_size / (1024.0 * 1024 * 1024)) << " GB" << std::endl;
-    
-    // Store model info
-    models_[model_name] = std::move(model_info);
-    
-    std::cout << "  Model loaded successfully!" << std::endl;
-    return true;
-}
-
 void DequantCache::unload_model(const std::string& model_name) {
     std::lock_guard<std::mutex> lock(cache_mutex_);
     
@@ -200,86 +146,37 @@ DequantCache::CacheStats DequantCache::get_stats() const {
     return stats;
 }
 
-bool DequantCache::parse_gguf(const std::string& path, ModelInfo& model_info) {
-    // Simplified GGUF parser
-    // In production, integrate with llama.cpp's gguf parser
-    
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        std::cerr << "Failed to open file: " << path << std::endl;
-        return false;
-    }
-    
-    // Read GGUF magic
-    uint32_t magic;
-    file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-    
-    if (magic != 0x46554747) {  // "GGUF" in little-endian
-        std::cerr << "Invalid GGUF magic number" << std::endl;
-        return false;
-    }
-    
-    // Read version
-    uint32_t version;
-    file.read(reinterpret_cast<char*>(&version), sizeof(version));
-    
-    std::cout << "    GGUF version: " << version << std::endl;
-    
-    // TODO: Full GGUF parsing implementation
-    // For now, create dummy model info for demonstration
-    model_info.architecture = "llama";
-    model_info.vocab_size = 32000;
-    model_info.context_length = 4096;
-    model_info.embedding_length = 4096;
-    model_info.num_layers = 32;
-    model_info.num_heads = 32;
-    model_info.num_kv_heads = 32;
-    
-    // Create dummy tensors
-    // In production, these would be parsed from GGUF
-    for (int i = 0; i < model_info.num_layers; i++) {
-        TensorInfo tensor;
-        tensor.name = "blk." + std::to_string(i) + ".attn_q.weight";
-        tensor.shape = {4096, 4096};
-        tensor.num_elements = 4096 * 4096;
-        model_info.tensors.push_back(tensor);
-        model_info.tensor_index[tensor.name] = model_info.tensors.size() - 1;
-    }
-    
-    return true;
-}
-
 // Dequantization implementations
 // These are simplified - production would use llama.cpp's optimized kernels
 
 std::vector<float> DequantCache::dequantize_q4_0(const void* data, size_t num_elements) {
-    std::vector<float> result(num_elements);
-    // TODO: Implement Q4_0 dequantization
-    return result;
+    (void)data;
+    (void)num_elements;
+    return {};
 }
 
 std::vector<float> DequantCache::dequantize_q5_0(const void* data, size_t num_elements) {
-    std::vector<float> result(num_elements);
-    // TODO: Implement Q5_0 dequantization
-    return result;
+    (void)data;
+    (void)num_elements;
+    return {};
 }
 
 std::vector<float> DequantCache::dequantize_q5_k(const void* data, size_t num_elements) {
-    std::vector<float> result(num_elements);
-    // TODO: Implement Q5_K dequantization
-    return result;
+    (void)data;
+    (void)num_elements;
+    return {};
 }
 
 std::vector<float> DequantCache::dequantize_q8_0(const void* data, size_t num_elements) {
-    std::vector<float> result(num_elements);
-    // TODO: Implement Q8_0 dequantization
-    return result;
+    (void)data;
+    (void)num_elements;
+    return {};
 }
 
 std::vector<float> DequantCache::dequantize_f16(const void* data, size_t num_elements) {
-    std::vector<float> result(num_elements);
-    // TODO: Implement F16 dequantization
-    return result;
+    (void)data;
+    (void)num_elements;
+    return {};
 }
 
 bool DequantCache::register_model(const std::string& model_name,

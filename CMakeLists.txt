@@ -14,12 +14,20 @@ cmake_minimum_required(VERSION 3.18)
 #   - CPU only:   cmake -B build -DSNAPLLM_CUDA=OFF
 # =============================================================================
 
-project(SnapLLM VERSION 1.3.0 LANGUAGES CXX C)
+project(SnapLLM VERSION 1.3.1 LANGUAGES CXX C)
+
+configure_file(
+    ${CMAKE_SOURCE_DIR}/include/snapllm/version.h.in
+    ${CMAKE_BINARY_DIR}/generated/snapllm/version.h
+    @ONLY
+)
 
 # C++ Standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+include(CTest)
 
 # Default build type
 if(NOT CMAKE_BUILD_TYPE)

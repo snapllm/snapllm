@@ -76,7 +76,17 @@ function UsageDonutChart({ data }: { data: UsageByType[] }) {
   return (
     <div className="relative w-32 h-32">
       <svg viewBox="0 0 100 100" className="w-full h-full transform -rotate-90">
-        {data.map((item, i) => {
+        {total <= 0 ? (
+          <circle
+            cx="50"
+            cy="50"
+            r="40"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="16"
+            className="text-surface-200 dark:text-surface-700"
+          />
+        ) : data.map((item, i) => {
           const angle = (item.count / total) * 360;
           const startAngle = currentAngle;
           currentAngle += angle;

@@ -2,7 +2,7 @@
   <img src="logo_files/FULL_TRIMMED_transparent.png" alt="SnapLLM Logo" width="400"/>
 </p>
 
-<h1 align="center">High-Performance Multi-Model LLM Inference Engine with Sub-Millisecond Model Switching, </br> Switch models in a snap! with Desktop UI, CLI & API</h1>
+<h1 align="center">Local Multi-Model LLM Inference with Desktop UI, CLI & API</h1>
 
 <p align="center">
   <strong>Arxiv Paper Link to be added</strong>
@@ -55,11 +55,11 @@ http://localhost:6930
 |---------|-------------|
 | **OpenAI Compatibility** | `/v1/chat/completions` - Works with OpenAI SDKs |
 | **Anthropic Compatibility** | `/v1/messages` - Works with Claude Code and Anthropic SDK |
-| **<1ms Model Switching** | Switch between loaded models instantly |
+| **Resident Model Selection** | Select between loaded models without reloading their weights |
 | **Tool Calling** | Function/tool calling support for agents |
 | **Extended Thinking** | Step-by-step reasoning before response |
 | **Streaming** | Server-Sent Events (SSE) for real-time responses |
-| **Context Caching** | vPID L2 KV cache persistence for O(1) queries |
+| **Context Caching** | vPID L2 KV cache persistence with indexed lookup |
 
 ---
 
@@ -78,7 +78,7 @@ http://localhost:6930
 ```bash
 # Set environment variables
 export ANTHROPIC_BASE_URL=http://localhost:6930
-export ANTHROPIC_AUTH_TOKEN=snapllm
+export ANTHROPIC_AUTH_TOKEN="${SNAPLLM_API_KEY:-local-loopback-client}"
 
 # Run Claude Code with your local model
 claude --model your-model-name
@@ -87,11 +87,12 @@ claude --model your-model-name
 ### Using with OpenAI SDK
 
 ```python
+import os
 from openai import OpenAI
 
 client = OpenAI(
     base_url="http://localhost:6930/v1",
-    api_key="snapllm"  # Any value works
+    api_key=os.environ.get("SNAPLLM_API_KEY", "local-loopback-client")
 )
 
 response = client.chat.completions.create(
@@ -103,11 +104,12 @@ response = client.chat.completions.create(
 ### Using with Anthropic SDK
 
 ```python
+import os
 import anthropic
 
 client = anthropic.Anthropic(
     base_url="http://localhost:6930",
-    api_key="snapllm"  # Any value works
+    api_key=os.environ.get("SNAPLLM_API_KEY", "local-loopback-client")
 )
 
 response = client.messages.create(
@@ -121,16 +123,29 @@ response = client.messages.create(
 
 ## Authentication
 
-SnapLLM does not require authentication by default. Any value can be used for API keys:
+The default loopback listener can run without authentication. A non-loopback
+bind requires `SNAPLLM_API_KEY` containing 32–4096 visible ASCII characters.
+The key is read from the environment only; it is not accepted as a command-line
+argument, persisted, or returned by the API.
 
 ```bash
-# All of these work
-curl -H "Authorization: Bearer anything"
-curl -H "x-api-key: anything"
-curl -H "anthropic-api-key: anything"
+export SNAPLLM_API_KEY='replace-with-a-random-value-at-least-32-characters'
+./snapllm --server --host 0.0.0.0
+
+curl -H "Authorization: Bearer $SNAPLLM_API_KEY" \
+  http://localhost:6930/api/v1/models
+
+# X-API-Key is also accepted
+curl -H "X-API-Key: $SNAPLLM_API_KEY" \
+  http://localhost:6930/api/v1/models
 ```
 
-For production deployments, implement authentication at the reverse proxy level (nginx, Cloudflare, etc.).
+`/` and `/health` remain unauthenticated health/information endpoints. Other API
+routes require the configured key. All requests receive Host validation.
+Browser requests additionally require an exact allowed Origin. Configure trusted
+origins with repeatable `--cors-origin` options or the comma-separated
+`SNAPLLM_CORS_ORIGINS` environment variable. Model and workspace paths are
+canonicalized and confined to their configured roots.
 
 ---
 
@@ -537,7 +552,8 @@ POST /api/v1/models/load
 POST /api/v1/models/switch
 ```
 
-This is SnapLLM's superpower - switching takes **<1ms**!
+Selecting an already-loaded model avoids an unnecessary weight reload. Runtime
+latency depends on hardware, model residency, and memory pressure.
 
 #### Request
 
@@ -641,7 +657,9 @@ GET /api/v1/models/cache/stats
 
 ## Context API (vPID L2)
 
-The Context API enables O(1) query complexity by pre-computing KV caches.
+The Context API pre-computes KV caches and uses hash-indexed context lookup.
+Only the lookup is expected O(1); generation still depends on the query and
+cached context.
 
 ### Ingest Context
 
@@ -1068,16 +1086,16 @@ curl -X POST http://localhost:6930/v1/messages \
 ```python
 # Load models at startup, switch during runtime
 # DON'T: Load/unload models for each request
-# DO: Load once, switch in <1ms
+# DO: Load once, then select resident models without reloading
 
 # Good pattern
 load_model("general", "path/to/general.gguf")
 load_model("coding", "path/to/coding.gguf")
 
 # During runtime
-switch_model("coding")  # <1ms
+switch_model("coding")
 response = chat("coding", ...)
-switch_model("general")  # <1ms
+switch_model("general")
 response = chat("general", ...)
 ```
 
@@ -1086,12 +1104,12 @@ response = chat("general", ...)
 ```python
 # For RAG/document Q&A, ingest once, query many times
 # DON'T: Send full document with each query
-# DO: Use context API for O(1) queries
+# DO: Use the context API to reuse pre-computed context state
 
 # Good pattern
 context_id = ingest_context(large_document, "llama3")
 
-# Fast queries (O(1) context lookup)
+# Hash-indexed context lookup; generation cost remains workload-dependent
 answer1 = query_context(context_id, "Question 1")
 answer2 = query_context(context_id, "Question 2")
 answer3 = query_context(context_id, "Question 3")

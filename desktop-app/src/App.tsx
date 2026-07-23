@@ -3,7 +3,7 @@
 // Premium Multi-Model AI Platform
 // ============================================================================
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -27,7 +27,6 @@ import AboutPage from './pages/About';
 import Help from './pages/Help';
 
 // Components
-import LoadingScreen from './components/LoadingScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 
 // ============================================================================
@@ -49,21 +48,6 @@ const queryClient = new QueryClient({
 // ============================================================================
 
 function App() {
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    // Show loading screen briefly for smooth transition
-    const timer = setTimeout(() => {
-      setIsLoading(false);
-    }, 1500);
-
-    return () => clearTimeout(timer);
-  }, []);
-
-  if (isLoading) {
-    return <LoadingScreen />;
-  }
-
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>

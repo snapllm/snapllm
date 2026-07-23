@@ -17,7 +17,7 @@ export default function AboutPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Badge variant="default">v1.0.0</Badge>
+          <Badge variant="default">v{__APP_VERSION__}</Badge>
         </div>
       </div>
 
@@ -81,18 +81,18 @@ export default function AboutPage() {
             <div className="p-4 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800">
               <div className="text-sm font-semibold text-surface-900 dark:text-white">vPID Switching</div>
               <p className="text-sm text-surface-600 dark:text-surface-400 mt-2">
-                Sub-millisecond model switching powered by tiered memory caching.
+                Switching among loaded models with tiered cache management.
               </p>
             </div>
             <div className="p-4 rounded-lg border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800">
               <div className="text-sm font-semibold text-surface-900 dark:text-white">Local-Only</div>
               <p className="text-sm text-surface-600 dark:text-surface-400 mt-2">
-                No external services, no auth, and no telemetry by default.
+                No telemetry by default; remote binds require API-key authentication.
               </p>
             </div>
           </div>
           <div className="pt-2 border-t border-surface-200 dark:border-surface-700">
-            <p className="text-xs text-surface-500">SnapLLM v1.0.0 - MIT License</p>
+            <p className="text-xs text-surface-500">SnapLLM v{__APP_VERSION__} - MIT License</p>
           </div>
           <div className="pt-3 mt-3 border-t border-surface-200 dark:border-surface-700 text-center">
             <p className="text-xs text-surface-500 mb-2">Developed by</p>

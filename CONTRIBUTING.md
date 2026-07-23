@@ -2,7 +2,7 @@
   <img src="logo_files/FULL_TRIMMED_transparent.png" alt="SnapLLM Logo" width="400"/>
 </p>
 
-<h1 align="center">High-Performance Multi-Model LLM Inference Engine with Sub-Millisecond Model Switching, </br> Switch models in a snap! with Desktop UI, CLI & API</h1>
+<h1 align="center">Local Multi-Model LLM Inference with Desktop UI, CLI & API</h1>
 
 <p align="center">
   <strong>Arxiv Paper Link to be added</strong>
@@ -92,7 +92,7 @@ build_cpu.bat
 
 ```bash
 chmod +x build.sh
-./build.sh --cuda
+./build.sh gpu
 ```
 
 #### Linux (CPU only)
@@ -204,7 +204,7 @@ perf(inference): optimize KV cache lookup by 40%
    build_gpu.bat
 
    # Linux
-   ./build.sh --cuda
+   ./build.sh gpu
    ```
 
 3. **Test your changes**:

@@ -2,13 +2,14 @@
  * @file snapllm_bindings.cpp
  * @brief Python bindings for SnapLLM C++ core using pybind11
  *
- * Exposes ModelManager and related classes to Python for use in FastAPI server
+ * Exposes ModelManager and related classes to Python applications.
  */
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/functional.h>
 #include "snapllm/model_manager.h"
+#include "snapllm/version.h"
 
 namespace py = pybind11;
 using namespace snapllm;
@@ -33,7 +34,7 @@ public:
      *
      * @param name Unique model identifier
      * @param path Absolute path to .gguf file
-     * @param cache_only If true, only create cache without loading for inference
+     * @param cache_only Reserved; true fails because cache-only loading is unsupported
      * @param domain Domain type for cache optimization
      * @return true if successful
      */
@@ -109,7 +110,8 @@ public:
     }
 
     /**
-     * Run inference directly from F32 cache without GGUF
+     * Reserved compatibility method; raises because cache-only inference is
+     * not implemented.
      *
      * @param model_name Model to use
      * @param prompt Input prompt
@@ -131,14 +133,16 @@ public:
     }
 
     /**
-     * Clear all prompt and generation caches
+     * Reserved compatibility method; raises because prompt-cache clearing is
+     * not implemented.
      */
     void clear_cache() {
         manager_->clear_prompt_cache();
     }
 
     /**
-     * Enable or disable prompt caching
+     * Reserved compatibility method; raises because prompt-cache control is
+     * not implemented.
      *
      * @param enabled true to enable caching, false to disable
      */
@@ -160,7 +164,7 @@ PYBIND11_MODULE(snapllm_bindings, m) {
         -----------------------
 
         Python interface to SnapLLM C++ core for multi-model LLM serving
-        with vPID ultra-fast model switching.
+        with selection between already-loaded models.
 
         Note: These bindings expose LLM functionality only. Diffusion and
         multimodal (vision) features are not available via this module.
@@ -178,7 +182,7 @@ PYBIND11_MODULE(snapllm_bindings, m) {
             >>> print(text)
             'Diabetes is a chronic condition...'
             >>>
-            >>> # Switch models (ultra-fast!)
+            >>> # Select another loaded model
             >>> manager.load_model("legal", "D:/Models/legal.gguf")
             >>> manager.switch_model("legal")
             True
@@ -210,8 +214,8 @@ PYBIND11_MODULE(snapllm_bindings, m) {
     py::class_<PyModelManager>(m, "ModelManager", R"pbdoc(
         Multi-model LLM manager with vPID caching
 
-        Manages multiple loaded models and provides ultra-fast switching
-        between them using memory-mapped Q8_0 tensor caching.
+        Manages multiple loaded models and selects between them using
+        memory-mapped Q8_0 tensor caching.
 
         Args:
             workspace_root: Path to directory for storing model caches
@@ -235,7 +239,7 @@ PYBIND11_MODULE(snapllm_bindings, m) {
                 Args:
                     name: Unique identifier for this model
                     path: Absolute path to .gguf model file
-                    cache_only: If True, only create cache without loading for inference
+                    cache_only: Reserved. True returns False because cache-only loading is unsupported.
                     domain: Domain type for cache optimization (Code/Chat/Reasoning/Vision/General)
 
                 Returns:
@@ -252,7 +256,7 @@ PYBIND11_MODULE(snapllm_bindings, m) {
              R"pbdoc(
                 Switch to a different loaded model
 
-                This operation is ultra-fast (<1ms) thanks to vPID caching.
+                This selects an already-loaded model without reloading its weights.
                 The model must already be loaded via load_model().
 
                 Args:
@@ -262,7 +266,7 @@ PYBIND11_MODULE(snapllm_bindings, m) {
                     True if successful, False if model not loaded
 
                 Example:
-                    >>> manager.switch_model("legal")  # <1ms!
+                    >>> manager.switch_model("legal")
                     True
              )pbdoc")
 
@@ -331,10 +335,8 @@ PYBIND11_MODULE(snapllm_bindings, m) {
              py::arg("prompt"),
              py::arg("max_tokens"),
              R"pbdoc(
-                Run inference directly from F32 cache without GGUF
-
-                This demonstrates Phase 2 capability: inference without
-                the original GGUF file, using only the vPID cache.
+                Reserved compatibility method. Raises RuntimeError because
+                cache-only inference is not implemented.
 
                 Args:
                     model_name: Model to use (must have cache created)
@@ -351,7 +353,7 @@ PYBIND11_MODULE(snapllm_bindings, m) {
 
         .def("clear_cache",
              &PyModelManager::clear_cache,
-             "Clear all prompt and generation caches for all models")
+             "Reserved; raises because prompt-cache clearing is not implemented")
 
         .def("enable_cache",
              &PyModelManager::enable_cache,
@@ -368,6 +370,6 @@ PYBIND11_MODULE(snapllm_bindings, m) {
              )pbdoc");
 
     // Module version info
-    m.attr("__version__") = "0.1.0";
+    m.attr("__version__") = SNAPLLM_VERSION;
     m.attr("__author__") = "SnapLLM Team";
 }

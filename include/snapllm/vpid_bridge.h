@@ -20,8 +20,11 @@
 #include <optional>
 #include <unordered_map>
 #include <mutex>
+#include <shared_mutex>
 #include <condition_variable>
 #include <functional>
+#include <filesystem>
+#include <limits>
 
 // Token streaming callback type
 // Parameters: token_text, token_id, is_eos (end of sequence)
@@ -62,6 +65,77 @@ struct ggml_tensor;
 struct ggml_context;
 
 namespace snapllm {
+
+class KVCacheExtractor;
+
+namespace model_lifecycle {
+
+constexpr size_t subtract_saturating(size_t value, size_t amount) noexcept {
+    return amount >= value ? 0 : value - amount;
+}
+
+constexpr bool budget_requires_eviction(
+    size_t used_mb,
+    size_t needed_mb,
+    size_t budget_mb) noexcept {
+    return budget_mb != 0 &&
+           (used_mb > budget_mb || needed_mb > budget_mb - used_mb);
+}
+
+inline std::optional<size_t> checked_model_size_mb(
+    const std::filesystem::path& path) noexcept {
+    std::error_code error;
+    const auto bytes = std::filesystem::file_size(path, error);
+    if (error) {
+        return std::nullopt;
+    }
+    constexpr std::uintmax_t bytes_per_mb = 1024U * 1024U;
+    const auto megabytes =
+        bytes / bytes_per_mb + (bytes % bytes_per_mb == 0U ? 0U : 1U);
+    if (megabytes > (std::numeric_limits<size_t>::max)()) {
+        return std::nullopt;
+    }
+    return static_cast<size_t>(megabytes);
+}
+
+class ContextLifetimeTracker {
+public:
+    std::shared_ptr<void> acquire(const std::string& model_name) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++references_[model_name];
+        }
+        return std::shared_ptr<void>(
+            this,
+            [this, model_name](void*) noexcept {
+                std::lock_guard<std::mutex> lock(mutex_);
+                auto found = references_.find(model_name);
+                if (found != references_.end() && --found->second == 0) {
+                    references_.erase(found);
+                    condition_.notify_all();
+                }
+            });
+    }
+
+    void wait_for_zero(const std::string& model_name) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        condition_.wait(lock, [this, &model_name] {
+            return references_.find(model_name) == references_.end();
+        });
+    }
+
+    void wait_for_all() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        condition_.wait(lock, [this] { return references_.empty(); });
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    std::unordered_map<std::string, size_t> references_;
+};
+
+} // namespace model_lifecycle
 
 /**
  * @brief Chat message data for batch processing
@@ -119,8 +193,8 @@ struct BatchResult {
  * // Load model - dequantizes once and stores in vPID
  * bridge.load_model("llama3", "D:\\Models\\llama3-8b-q5.gguf");
  *
- * // Create inference context - uses vPID tensors directly
- * auto ctx = bridge.create_inference_context("llama3");
+ * // Public generation APIs create and own inference contexts internally.
+ * auto text = bridge.generate_text("llama3", "Hello");
  * @endcode
  */
 class VPIDBridge {
@@ -157,50 +231,6 @@ public:
         const std::string& gguf_path,
         bool force_reload = false,
         const GPUConfig& gpu_config = GPUConfig::auto_detect()
-    );
-
-    /**
-     * @brief Create llama.cpp inference context using vPID tensors
-     *
-     * This creates a llama_context that is configured to use the
-     * pre-dequantized F32 tensors from vPID instead of loading
-     * from a GGUF file.
-     *
-     * @param model_name Name of model to use
-     * @param n_ctx Context size (default: 2048)
-     * @param n_batch Batch size (default: 512)
-     * @return Pointer to llama_context (caller must free with llama_free)
-     */
-    llama_context* create_inference_context(
-        const std::string& model_name,
-        int n_ctx = 2048,
-        int n_batch = 512
-    );
-
-    /**
-     * @brief Get pointer to tensor data for llama.cpp
-     *
-     * This is called by llama.cpp during inference to get tensor data.
-     * Returns a direct pointer into the vPID mapped memory (zero-copy).
-     *
-     * @param model_name Model name
-     * @param tensor_name Tensor name
-     * @return Pointer to F32 data, or nullptr if not found
-     */
-    const float* get_tensor_data(
-        const std::string& model_name,
-        const std::string& tensor_name
-    );
-
-    /**
-     * @brief Get tensor metadata
-     * @param model_name Model name
-     * @param tensor_name Tensor name
-     * @return Pointer to tensor info, or nullptr if not found
-     */
-    const TensorInfo* get_tensor_info(
-        const std::string& model_name,
-        const std::string& tensor_name
     );
 
     /**
@@ -422,6 +452,25 @@ public:
     );
 
 private:
+    friend class KVCacheExtractor;
+
+    // Raw llama.cpp pointers are internal-only. The lease keeps model storage
+    // alive for every context created by KVCacheExtractor.
+    std::pair<llama_context*, std::shared_ptr<void>> create_leased_inference_context(
+        const std::string& model_name,
+        int n_ctx = 2048,
+        int n_batch = 512);
+    llama_context* create_inference_context(
+        const std::string& model_name,
+        int n_ctx = 2048,
+        int n_batch = 512);
+    const float* get_tensor_data(
+        const std::string& model_name,
+        const std::string& tensor_name);
+    const TensorInfo* get_tensor_info(
+        const std::string& model_name,
+        const std::string& tensor_name);
+
     std::string workspace_root_;  // Root directory for all model workspaces
     std::unique_ptr<VPIDHotCache> hot_cache_;  // HOT tier RAM cache (shared across ALL models)
     TensorValidator validator_;  // Tensor validation system
@@ -432,11 +481,13 @@ private:
     std::unordered_map<std::string, llama_model*> loaded_models_;  // model_name -> llama_model
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> model_access_times_;  // For LRU eviction
     mutable std::mutex models_mutex_;  // Mutable to allow locking in const methods
+    mutable std::shared_mutex lifecycle_mutex_;  // Inference holds shared ownership; load/unload is exclusive
+    model_lifecycle::ContextLifetimeTracker context_lifetimes_;
 
     // GPU memory management - Smart VRAM budgeting
-    static constexpr size_t VRAM_BUDGET_MB = 7000;  // RTX 4060 Laptop ~7GB usable VRAM
     std::unordered_map<std::string, size_t> model_vram_usage_;  // model_name -> VRAM in MB
     size_t total_vram_used_ = 0;  // Current total VRAM usage in MB
+    size_t configured_vram_budget_mb_ = 0;  // 0 means capacity is unknown; do not evict speculatively
 
     /**
      * @brief Evict models until we have enough VRAM space
@@ -462,6 +513,7 @@ private:
     int active_inferences_ = 0;
     int max_concurrent_inferences_ = 1;  // Default: serialize GPU inference
 
+    class InferenceSlotGuard;
     void acquire_inference_slot();
     void release_inference_slot();
 

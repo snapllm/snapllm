@@ -3,7 +3,7 @@
  * @brief Model Manager - Multi-model orchestration and switching
  *
  * SnapLLM Model Manager provides:
- * - Ultra-fast model switching (<1ms) via vPID architecture
+ * - Model switching that includes any required residency reload
  * - Multi-model support with shared HOT cache
  * - GPU/CPU inference with llama.cpp backend
  * - Batch inference support
@@ -20,6 +20,7 @@
 #include <optional>
 #include <unordered_set>
 #include <unordered_map>
+#include <mutex>
 
 namespace snapllm {
 
@@ -38,7 +39,7 @@ enum class DomainType {
  * @brief Model Manager
  *
  * Orchestrates multiple models, handles switching, and manages resources.
- * Implements the "<1ms model switch" innovation using vPID architecture.
+ * A successful switch means the selected model is resident and ready.
  */
 class ModelManager {
 public:
@@ -56,6 +57,8 @@ public:
     explicit ModelManager(std::shared_ptr<VPIDWorkspace> vpid);
 
     // Model lifecycle
+    // cache_only is retained for source compatibility; true fails explicitly
+    // because direct cache-only construction is not implemented.
     bool load_model(const std::string& name, const std::string& gguf_path,
                     bool cache_only = false, DomainType domain = DomainType::General,
                     const GPUConfig& gpu_config = GPUConfig::auto_detect());
@@ -79,7 +82,8 @@ public:
                               size_t max_tokens = 100, float temperature = 0.8f,
                               float top_p = 0.95f, int top_k = 40, float repeat_penalty = 1.1f);
 
-    // Cache-only inference (no GGUF needed after first load)
+    // Reserved compatibility surface; throws because cache-only inference is
+    // not implemented.
     std::string run_inference_from_cache(const std::string& model_name,
                                          const std::string& prompt, int max_tokens);
 
@@ -117,7 +121,7 @@ public:
     void set_validation_config(const ValidationConfig& config);
     const ValidationConfig& get_validation_config() const;
 
-    // Cache management
+    // Prompt-cache control is reserved; both methods throw unsupported.
     void print_cache_stats() const;
     void clear_prompt_cache();
     void enable_prompt_cache(bool enabled);
@@ -137,9 +141,12 @@ private:
     std::unordered_set<std::string> loaded_models_;
     std::unordered_map<std::string, std::string> model_paths_;  // model_name -> gguf_path for auto-reload
     bool prompt_cache_enabled_ = true;
+    mutable std::mutex state_mutex_;
+    mutable std::mutex lifecycle_mutex_;
 
     // Auto-reload evicted model from disk cache
     bool ensure_model_in_gpu(const std::string& name);
+    bool ensure_model_in_gpu_locked(const std::string& name);
 };
 
 } // namespace snapllm

@@ -252,6 +252,7 @@ DecompressionResult Compressor::decompress(const std::vector<uint8_t>& data) {
 }
 
 DecompressionResult Compressor::decompress(const void* data, size_t size) {
+    constexpr uint64_t kMaximumDecompressedBytes = 1024ULL * 1024ULL * 1024ULL;
     if (!data || size < sizeof(CompressedHeader)) {
         return DecompressionResult::fail("Input too small for header");
     }
@@ -265,8 +266,15 @@ DecompressionResult Compressor::decompress(const void* data, size_t size) {
     }
 
     const CompressedHeader& header = *header_opt;
+    if (header.original_size > kMaximumDecompressedBytes) {
+        return DecompressionResult::fail("Declared decompressed size exceeds safety limit");
+    }
     const uint8_t* compressed_data = static_cast<const uint8_t*>(data) + sizeof(CompressedHeader);
     size_t compressed_size = size - sizeof(CompressedHeader);
+    if (header.get_type() == CompressionType::None &&
+        header.original_size > compressed_size) {
+        return DecompressionResult::fail("Uncompressed payload is shorter than declared size");
+    }
 
     DecompressionResult result;
 

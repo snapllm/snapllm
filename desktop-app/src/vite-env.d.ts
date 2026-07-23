@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+declare const __APP_VERSION__: string;
+
 // Declare PNG image imports
 declare module '*.png' {
   const value: string;

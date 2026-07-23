@@ -285,7 +285,8 @@ MultimodalResult MultimodalBridge::generate(
         }
     }
 
-    std::cout << "[MultimodalBridge] Tokenizing prompt: " << formatted_prompt.substr(0, 50) << "..." << std::endl;
+    std::cout << "[MultimodalBridge] Tokenizing prompt ("
+              << formatted_prompt.size() << " bytes)" << std::endl;
     mtmd_input_text input_text;
     input_text.text = formatted_prompt.c_str();
     input_text.add_special = true;

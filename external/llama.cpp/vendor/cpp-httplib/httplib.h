@@ -4644,12 +4644,10 @@ inline bool parse_header(const char *beg, const char *end, T fn) {
 
     if (!detail::fields::is_field_value(val)) { return false; }
 
-    if (case_ignore::equal(key, "Location") ||
-        case_ignore::equal(key, "Referer")) {
-      fn(key, val);
-    } else {
-      fn(key, decode_path_component(val));
-    }
+    // Header field values are not URL path components. Preserve the wire
+    // value so application trust-boundary checks (notably Host and Origin)
+    // cannot be bypassed with percent-encoded aliases.
+    fn(key, val);
 
     return true;
   }

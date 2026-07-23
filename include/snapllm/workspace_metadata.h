@@ -15,6 +15,15 @@
 
 namespace snapllm {
 
+bool is_safe_workspace_component(const std::string& value) noexcept;
+bool is_path_within_workspace(
+    const std::filesystem::path& workspace,
+    const std::filesystem::path& candidate) noexcept;
+#ifdef SNAPLLM_WORKSPACE_TEST_HOOKS
+void set_workspace_atomic_write_failure_for_test(bool enabled) noexcept;
+void set_workspace_atomic_write_failure_after_for_test(int successful_writes) noexcept;
+#endif
+
 /**
  * @brief Tensor location in vPID workspace
  */

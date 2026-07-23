@@ -50,7 +50,7 @@ const navigationGroups = [
     items: [
       { path: '/models', icon: Boxes, label: 'Models', description: 'Load & manage models' },
       { path: '/compare', icon: GitCompare, label: 'A/B Compare', description: 'Side-by-side model comparison' },
-      { path: '/switch', icon: Zap, label: 'Quick Switch', description: '<1ms model switching' },
+      { path: '/switch', icon: Zap, label: 'Quick Switch', description: 'Switch loaded models' },
     ],
   },
   {
@@ -171,7 +171,7 @@ export const Sidebar: React.FC = () => {
                       {activeModel.name}
                     </p>
                     <p className="text-2xs text-surface-500 truncate">
-                      {activeModel.quantization || activeModel.engine || 'GPU'} • {activeModel.performance?.tokensPerSecond?.toFixed(0) || activeModel.throughput_toks?.toFixed(0) || '—'} tok/s
+                      {activeModel.quantization || activeModel.architecture || 'Model'} • {activeModel.performance?.tokensPerSecond?.toFixed(0) || '—'} tok/s
                     </p>
                   </div>
                   <div className="status-online" />

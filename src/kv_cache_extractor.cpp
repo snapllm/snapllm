@@ -50,6 +50,7 @@ KVCacheExtractor::~KVCacheExtractor() {
         }
     }
     cached_contexts_.clear();
+    cached_context_leases_.clear();
 }
 
 //=============================================================================
@@ -67,15 +68,20 @@ llama_context* KVCacheExtractor::get_context(const std::string& model_name) {
 
     // Create new context
     llama_context* ctx = nullptr;
+    VPIDBridge* context_bridge = bridge_;
+    std::shared_ptr<VPIDBridge> managed_bridge;
 
-    if (bridge_) {
-        // Get context from VPIDBridge directly
-        ctx = bridge_->create_inference_context(model_name);
-    } else if (manager_) {
+    if (!context_bridge && manager_) {
         // Get context via ModelManager's bridge
-        auto bridge = manager_->get_bridge();
-        if (bridge) {
-            ctx = bridge->create_inference_context(model_name);
+        managed_bridge = manager_->get_bridge();
+        context_bridge = managed_bridge.get();
+    }
+    if (context_bridge) {
+        auto [created_context, lease] =
+            context_bridge->create_leased_inference_context(model_name);
+        ctx = created_context;
+        if (ctx) {
+            cached_context_leases_[model_name] = std::move(lease);
         }
     }
 
@@ -98,6 +104,7 @@ void KVCacheExtractor::clear_context_cache(const std::string& model_name) {
             }
         }
         cached_contexts_.clear();
+        cached_context_leases_.clear();
     } else {
         // Clear specific model's context
         auto it = cached_contexts_.find(model_name);
@@ -106,6 +113,7 @@ void KVCacheExtractor::clear_context_cache(const std::string& model_name) {
                 llama_free(it->second);
             }
             cached_contexts_.erase(it);
+            cached_context_leases_.erase(model_name);
         }
     }
 }

@@ -431,7 +431,7 @@ GenerationResult DiffusionBridge::generate_image(
     }
 
     std::cout << "\n[DiffusionBridge] Generating image..." << std::endl;
-    std::cout << "[DiffusionBridge] Prompt: " << params.prompt << std::endl;
+    std::cout << "[DiffusionBridge] Prompt bytes: " << params.prompt.size() << std::endl;
     std::cout << "[DiffusionBridge] Size: " << params.size.width << "x" << params.size.height << std::endl;
     std::cout << "[DiffusionBridge] Steps: " << params.steps << std::endl;
 
@@ -523,7 +523,7 @@ GenerationResult DiffusionBridge::generate_video(
     sd_ctx_t* ctx = ctx_it->second;
 
     std::cout << "\n[DiffusionBridge] Generating video..." << std::endl;
-    std::cout << "[DiffusionBridge] Prompt: " << params.prompt << std::endl;
+    std::cout << "[DiffusionBridge] Prompt bytes: " << params.prompt.size() << std::endl;
     std::cout << "[DiffusionBridge] Frame size: " << params.frame_size.width << "x" << params.frame_size.height << std::endl;
     std::cout << "[DiffusionBridge] Frames: " << params.num_frames << std::endl;
     std::cout << "[DiffusionBridge] Steps: " << params.steps << std::endl;
@@ -542,25 +542,10 @@ GenerationResult DiffusionBridge::generate_video(
     // Use a default negative prompt if none provided
     static const char* default_neg_prompt = "blurry, low quality, distorted, static, worst quality";
 
-    // Always print to stdout for visibility
-    std::cout << "[DiffusionBridge] Input negative_prompt: '" << params.negative_prompt << "'" << std::endl;
-    std::cout << "[DiffusionBridge] Input is empty: " << (params.negative_prompt.empty() ? "YES" : "NO") << std::endl;
-
     vid_params.negative_prompt = params.negative_prompt.empty() ? default_neg_prompt : params.negative_prompt.c_str();
 
-    std::cout << "[DiffusionBridge] Final negative_prompt: '" << vid_params.negative_prompt << "'" << std::endl;
-    std::cout.flush();
-
-    // Debug logging to file
-    FILE* logf = fopen("D:/SnapLLM_Workspace/diffusion_debug.log", "a");
-    if (logf) {
-        fprintf(logf, "[DiffusionBridge] About to generate video:\n");
-        fprintf(logf, "  Prompt: %s\n", params.prompt.c_str());
-        fprintf(logf, "  Negative: %s\n", vid_params.negative_prompt);
-        fprintf(logf, "  Size: %dx%d, Frames: %d, Steps: %d\n",
-                params.frame_size.width, params.frame_size.height, params.num_frames, params.steps);
-        fclose(logf);
-    }
+    std::cout << "[DiffusionBridge] Negative prompt bytes: "
+              << params.negative_prompt.size() << std::endl;
     vid_params.width = params.frame_size.width;
     vid_params.height = params.frame_size.height;
     vid_params.video_frames = params.num_frames;
@@ -571,24 +556,10 @@ GenerationResult DiffusionBridge::generate_video(
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Debug: Log before calling generate_video
-    logf = fopen("D:/SnapLLM_Workspace/diffusion_debug.log", "a");
-    if (logf) {
-        fprintf(logf, "[DiffusionBridge] Calling generate_video()...\n");
-        fclose(logf);
-    }
-
     // Generate video (call C API with global namespace)
     int num_frames_out = 0;
     sd_image_t* frames = ::generate_video(ctx, &vid_params, &num_frames_out);
 
-    // Debug: Log after generate_video returns
-    logf = fopen("D:/SnapLLM_Workspace/diffusion_debug.log", "a");
-    if (logf) {
-        fprintf(logf, "[DiffusionBridge] generate_video() returned: frames=%p, num_frames=%d\n",
-                (void*)frames, num_frames_out);
-        fclose(logf);
-    }
 
     auto end_time = std::chrono::high_resolution_clock::now();
     result.generation_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();

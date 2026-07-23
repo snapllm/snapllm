@@ -7,7 +7,6 @@ import { persist, devtools } from 'zustand/middleware';
 import { immer } from 'zustand/middleware/immer';
 import type {
   Theme,
-  User,
   Model,
   ModelConfig,
   Conversation,
@@ -16,7 +15,6 @@ import type {
   Agent,
   Workflow,
   Notification,
-  ApiKey,
   SystemMetrics,
   DEFAULT_MODEL_CONFIG,
 } from '../types';
@@ -110,96 +108,6 @@ export const useAppStore = create<AppState>()(
       }
     ),
     { name: 'AppStore' }
-  )
-);
-
-// ----------------------------------------------------------------------------
-// Auth Store - User Authentication State
-// ----------------------------------------------------------------------------
-
-interface AuthState {
-  user: User | null;
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  error: string | null;
-
-  setUser: (user: User | null) => void;
-  login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
-  updatePreferences: (preferences: Partial<User['preferences']>) => void;
-}
-
-export const useAuthStore = create<AuthState>()(
-  devtools(
-    persist(
-      immer((set, get) => ({
-        user: null,
-        isAuthenticated: false,
-        isLoading: false,
-        error: null,
-
-        setUser: (user) => set((state) => {
-          state.user = user;
-          state.isAuthenticated = !!user;
-        }),
-
-        login: async (email, password) => {
-          set((state) => { state.isLoading = true; state.error = null; });
-          try {
-            // Mock login - replace with actual API call
-            const mockUser: User = {
-              id: '1',
-              email,
-              name: email.split('@')[0],
-              role: 'admin',
-              preferences: {
-                theme: 'system',
-                language: 'en',
-                notifications: {
-                  email: true,
-                  desktop: true,
-                  modelReady: true,
-                  generationComplete: true,
-                  errors: true,
-                },
-                sidebarCollapsed: false,
-              },
-              createdAt: new Date().toISOString(),
-              lastLoginAt: new Date().toISOString(),
-            };
-            set((state) => {
-              state.user = mockUser;
-              state.isAuthenticated = true;
-              state.isLoading = false;
-            });
-          } catch (error) {
-            set((state) => {
-              state.error = 'Login failed';
-              state.isLoading = false;
-            });
-          }
-        },
-
-        logout: () => set((state) => {
-          state.user = null;
-          state.isAuthenticated = false;
-        }),
-
-        updatePreferences: (preferences) => set((state) => {
-          if (state.user) {
-            state.user.preferences = { ...state.user.preferences, ...preferences };
-          }
-        }),
-      })),
-      {
-        name: 'snapllm-auth-store',
-        partialize: (state) => ({
-          user: state.user,
-          isAuthenticated: state.isAuthenticated,
-        }),
-      }
-    ),
-    { name: 'AuthStore' }
   )
 );
 

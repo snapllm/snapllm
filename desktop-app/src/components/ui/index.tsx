@@ -582,7 +582,7 @@ interface ProgressProps {
   max?: number;
   size?: 'sm' | 'md' | 'lg';
   showValue?: boolean;
-  variant?: 'default' | 'success' | 'warning' | 'error';
+  variant?: 'default' | 'brand' | 'success' | 'warning' | 'error';
   className?: string;
 }
 
@@ -604,6 +604,7 @@ export const Progress: React.FC<ProgressProps> = ({
 
   const colorClasses = {
     default: 'bg-brand-500',
+    brand: 'bg-brand-500',
     success: 'bg-success-500',
     warning: 'bg-warning-500',
     error: 'bg-error-500',
@@ -987,7 +988,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
   delay = 200,
 }) => {
   const [isVisible, setIsVisible] = React.useState(false);
-  const timeoutRef = React.useRef<NodeJS.Timeout>();
+  const timeoutRef = React.useRef<ReturnType<typeof setTimeout>>();
 
   const show = () => {
     timeoutRef.current = setTimeout(() => setIsVisible(true), delay);

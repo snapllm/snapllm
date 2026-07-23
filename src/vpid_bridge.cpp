@@ -10,10 +10,14 @@
 #include <iomanip>
 #include <cstring>
 #include <atomic>
+#include <array>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
+extern "C" {
+#include "sha256.h"
+}
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -32,6 +36,40 @@ extern "C" {
 #include "llama-model.h"
 
 namespace snapllm {
+
+namespace {
+
+std::optional<std::string> calculate_file_sha256(
+    const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return std::nullopt;
+
+    sha256_t state{};
+    sha256_init(&state);
+    std::vector<unsigned char> buffer(1024U * 1024U);
+    while (input) {
+        input.read(
+            reinterpret_cast<char*>(buffer.data()),
+            static_cast<std::streamsize>(buffer.size()));
+        const auto count = input.gcount();
+        if (count > 0) {
+            sha256_update(
+                &state, buffer.data(), static_cast<std::size_t>(count));
+        }
+    }
+    if (!input.eof()) return std::nullopt;
+
+    unsigned char digest[SHA256_DIGEST_SIZE]{};
+    sha256_final(&state, digest);
+    std::ostringstream output;
+    output << std::hex << std::setfill('0');
+    for (const auto byte : digest) {
+        output << std::setw(2) << static_cast<unsigned int>(byte);
+    }
+    return output.str();
+}
+
+} // anonymous namespace
 
 // Get default workspace path based on OS
 static std::string get_default_workspace() {
@@ -54,6 +92,21 @@ static std::string get_default_workspace() {
 bool VPIDBridge::backend_initialized_ = false;
 std::mutex VPIDBridge::backend_mutex_;
 
+class VPIDBridge::InferenceSlotGuard {
+public:
+    explicit InferenceSlotGuard(VPIDBridge& bridge) : bridge_(bridge) {
+        bridge_.acquire_inference_slot();
+    }
+    ~InferenceSlotGuard() noexcept {
+        bridge_.release_inference_slot();
+    }
+    InferenceSlotGuard(const InferenceSlotGuard&) = delete;
+    InferenceSlotGuard& operator=(const InferenceSlotGuard&) = delete;
+
+private:
+    VPIDBridge& bridge_;
+};
+
 VPIDBridge::VPIDBridge(const std::string& workspace_root)
     : workspace_root_(workspace_root.empty() ? get_default_workspace() : workspace_root),
       hot_cache_(std::make_unique<VPIDHotCache>(2ULL * 1024 * 1024 * 1024)),  // 2GB HOT cache (shared across ALL models)
@@ -73,6 +126,8 @@ VPIDBridge::VPIDBridge(const std::string& workspace_root)
 
 VPIDBridge::~VPIDBridge() {
     // Clean up all loaded models
+    std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    context_lifetimes_.wait_for_all();
     std::lock_guard<std::mutex> lock(models_mutex_);
 
     if (!loaded_models_.empty()) {
@@ -84,8 +139,12 @@ VPIDBridge::~VPIDBridge() {
         }
 
         loaded_models_.clear();
-        model_access_times_.clear();
     }
+    model_access_times_.clear();
+    model_vram_usage_.clear();
+    model_caches_.clear();
+    ram_cache_.clear();
+    total_vram_used_ = 0;
 
     // NOTE: Don't call llama_backend_free() here - it's a shared resource
     // Let it be cleaned up at program exit naturally
@@ -118,7 +177,8 @@ std::string VPIDBridge::evict_lru_model() {
     auto vram_it = model_vram_usage_.find(lru_model);
     if (vram_it != model_vram_usage_.end()) {
         freed_mb = vram_it->second;
-        total_vram_used_ -= freed_mb;
+        total_vram_used_ =
+            model_lifecycle::subtract_saturating(total_vram_used_, freed_mb);
         model_vram_usage_.erase(vram_it);
     }
 
@@ -127,33 +187,41 @@ std::string VPIDBridge::evict_lru_model() {
 
     auto it = loaded_models_.find(lru_model);
     if (it != loaded_models_.end()) {
+        context_lifetimes_.wait_for_zero(lru_model);
         llama_model_free(it->second);
         loaded_models_.erase(it);
         model_access_times_.erase(lru_model);
-        std::cout << "[GPU Memory] Model '" << lru_model << "' evicted. VRAM: " << total_vram_used_ << "/" << VRAM_BUDGET_MB << " MB" << std::endl;
+        hot_cache_->evict_model(lru_model);
+        std::cout << "[GPU Memory] Model '" << lru_model << "' evicted. Estimated VRAM: "
+                  << total_vram_used_ << "/" << configured_vram_budget_mb_ << " MB" << std::endl;
     }
 
     return lru_model;
 }
 
 bool VPIDBridge::ensure_vram_space(size_t needed_mb) {
-    // Check if we already have enough space
-    if (total_vram_used_ + needed_mb <= VRAM_BUDGET_MB) {
-        std::cout << "[GPU Memory] Enough VRAM available: " << total_vram_used_ << " + " << needed_mb << " <= " << VRAM_BUDGET_MB << " MB" << std::endl;
+    if (!model_lifecycle::budget_requires_eviction(
+            total_vram_used_, needed_mb, configured_vram_budget_mb_)) {
         return true;
     }
 
-    std::cout << "[GPU Memory] Need " << needed_mb << " MB, have " << (VRAM_BUDGET_MB - total_vram_used_) << " MB free, evicting..." << std::endl;
+    const size_t available_mb =
+        model_lifecycle::subtract_saturating(configured_vram_budget_mb_, total_vram_used_);
+    std::cout << "[GPU Memory] Need " << needed_mb << " MB, have " << available_mb
+              << " MB of configured capacity free, evicting..." << std::endl;
 
     // Evict models until we have enough space
-    while (total_vram_used_ + needed_mb > VRAM_BUDGET_MB && !loaded_models_.empty()) {
+    while (model_lifecycle::budget_requires_eviction(
+               total_vram_used_, needed_mb, configured_vram_budget_mb_) &&
+           !loaded_models_.empty()) {
         std::string evicted = evict_lru_model();
         if (evicted.empty()) {
             break;  // No more models to evict
         }
     }
 
-    return (total_vram_used_ + needed_mb <= VRAM_BUDGET_MB);
+    return !model_lifecycle::budget_requires_eviction(
+        total_vram_used_, needed_mb, configured_vram_budget_mb_);
 }
 
 bool VPIDBridge::load_model_with_vpid_tensors(
@@ -167,6 +235,21 @@ bool VPIDBridge::load_model_with_vpid_tensors(
     if (!cache) {
         std::cerr << "Error: Cache pointer is null" << std::endl;
         return false;
+    }
+
+    const auto checked_size = model_lifecycle::checked_model_size_mb(gguf_path);
+    if (!checked_size) {
+        std::cerr << "  [GPU Memory] Failed to determine model file size" << std::endl;
+        return false;
+    }
+    const size_t model_size_for_vram = *checked_size;
+    {
+        std::lock_guard<std::mutex> lock(models_mutex_);
+        if (loaded_models_.find(model_name) == loaded_models_.end() &&
+            !ensure_vram_space(model_size_for_vram)) {
+            std::cerr << "  [GPU Memory] Model exceeds configured VRAM budget" << std::endl;
+            return false;
+        }
     }
 
     // Initialize llama.cpp backend (only once)
@@ -370,21 +453,22 @@ bool VPIDBridge::load_model_with_vpid_tensors(
     {
         std::lock_guard<std::mutex> lock(models_mutex_);
 
-        // Check if we need to evict a model to make room
-        if (loaded_models_.find(model_name) == loaded_models_.end()) {
-            // New model - may need eviction
-            evict_lru_model();
-        }
-
         // Free old model if exists
         auto it = loaded_models_.find(model_name);
         if (it != loaded_models_.end()) {
             std::cout << "  [Custom Loader] Freeing old model instance..." << std::endl;
             llama_model_free(it->second);
+            auto old_vram_it = model_vram_usage_.find(model_name);
+            if (old_vram_it != model_vram_usage_.end()) {
+                total_vram_used_ = model_lifecycle::subtract_saturating(
+                    total_vram_used_, old_vram_it->second);
+            }
         }
 
         loaded_models_[model_name] = model;
         model_access_times_[model_name] = std::chrono::steady_clock::now();
+        model_vram_usage_[model_name] = model_size_for_vram;
+        total_vram_used_ += model_size_for_vram;
     }
 
     // Register tensors for layer-aware eviction
@@ -439,12 +523,24 @@ bool VPIDBridge::load_and_dequantize_model(
     bool force_reload,
     const GPUConfig& gpu_config)
 {
+    std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    context_lifetimes_.wait_for_zero(model_name);
+    if (gpu_config.vram_budget_mb > 0) {
+        std::lock_guard<std::mutex> lock(models_mutex_);
+        configured_vram_budget_mb_ = gpu_config.vram_budget_mb;
+    }
+
     std::cout << "Loading model: " << model_name << std::endl;
     std::cout << "  From: " << gguf_path << std::endl;
 
     // Extract model name and quantization type from GGUF path
     std::string extracted_model_name = WorkspaceMetadata::extract_model_name(gguf_path);
     std::string quant_type = WorkspaceMetadata::extract_quant_type(gguf_path);
+    const auto gguf_hash = calculate_file_sha256(gguf_path);
+    if (!gguf_hash) {
+        std::cerr << "Failed to calculate model SHA-256" << std::endl;
+        return false;
+    }
 
     // Get or create per-model cache
     // Cache is keyed by user-provided model_name, workspace path uses extracted names
@@ -480,7 +576,10 @@ bool VPIDBridge::load_and_dequantize_model(
         // Load metadata from workspace
         ModelMetadata ws_metadata = workspace_metadata_->get_model_metadata(extracted_model_name, quant_type);
 
-        if (!ws_metadata.tensors.empty()) {
+        if (ws_metadata.gguf_hash != *gguf_hash) {
+            std::cerr << "  Workspace metadata does not match model SHA-256; "
+                         "falling back to full dequantization" << std::endl;
+        } else if (!ws_metadata.tensors.empty()) {
             std::cout << "  ✓ Workspace metadata loaded!" << std::endl;
             std::cout << "    Tensors: " << ws_metadata.tensor_count << std::endl;
             std::cout << "    Total size: " << (ws_metadata.total_size_bytes / (1024.0 * 1024.0 * 1024.0)) << " GB" << std::endl;
@@ -577,19 +676,28 @@ bool VPIDBridge::load_and_dequantize_model(
     // GPU memory management: Smart VRAM-based eviction
     // Calculate model size for VRAM tracking (done early before loading)
     size_t model_size_for_vram = 0;
-    try {
-        model_size_for_vram = std::filesystem::file_size(gguf_path) / (1024 * 1024);  // MB
-    } catch (...) {}
+    if (gpu_config.n_gpu_layers != 0) {
+        const auto checked_size = model_lifecycle::checked_model_size_mb(gguf_path);
+        if (!checked_size) {
+            std::cerr << "  [GPU Memory] Failed to determine model file size" << std::endl;
+            return false;
+        }
+        model_size_for_vram = *checked_size;
+    }
     
     {
         std::lock_guard<std::mutex> lock(models_mutex_);
         std::cout << "  [GPU Memory Check] model=" << model_name
                   << ", size=" << model_size_for_vram << " MB"
-                  << ", used=" << total_vram_used_ << "/" << VRAM_BUDGET_MB << " MB" << std::endl;
+                  << ", estimated_used=" << total_vram_used_ << " MB"
+                  << ", configured_budget=" << configured_vram_budget_mb_ << " MB" << std::endl;
         
         // Only evict if this is a new model AND we don't have space
         if (loaded_models_.find(model_name) == loaded_models_.end()) {
-            ensure_vram_space(model_size_for_vram);
+            if (!ensure_vram_space(model_size_for_vram)) {
+                std::cerr << "  [GPU Memory] Model exceeds configured VRAM budget" << std::endl;
+                return false;
+            }
         }
     }
 
@@ -603,11 +711,12 @@ bool VPIDBridge::load_and_dequantize_model(
 
     // GPU LAYER ALLOCATION: Smart mode based on model size and VRAM
     // Get model size to determine optimal GPU offload ratio
-    size_t gguf_file_bytes = 0;
-    try {
-        gguf_file_bytes = std::filesystem::file_size(gguf_path);
-    } catch (...) {
-        gguf_file_bytes = 0;
+    std::error_code size_error;
+    const auto gguf_file_bytes =
+        std::filesystem::file_size(gguf_path, size_error);
+    if (size_error) {
+        std::cerr << "  [GPU Layers] Failed to determine model file size" << std::endl;
+        return false;
     }
     size_t model_size_mb = gguf_file_bytes / (1024 * 1024);
     
@@ -712,17 +821,16 @@ bool VPIDBridge::load_and_dequantize_model(
     {
         std::lock_guard<std::mutex> lock(models_mutex_);
 
-        // Check if we need to evict a model to make room
-        if (loaded_models_.find(model_name) == loaded_models_.end()) {
-            // New model - may need eviction
-            evict_lru_model();
-        }
-
         // Free old model if exists
         auto it = loaded_models_.find(model_name);
         if (it != loaded_models_.end()) {
             std::cout << "  Freeing old model instance..." << std::endl;
             llama_model_free(it->second);
+            auto old_vram_it = model_vram_usage_.find(model_name);
+            if (old_vram_it != model_vram_usage_.end()) {
+                total_vram_used_ = model_lifecycle::subtract_saturating(
+                    total_vram_used_, old_vram_it->second);
+            }
         }
 
         loaded_models_[model_name] = model;
@@ -731,8 +839,9 @@ bool VPIDBridge::load_and_dequantize_model(
         // Track VRAM usage for this model
         model_vram_usage_[model_name] = model_size_for_vram;
         total_vram_used_ += model_size_for_vram;
-        std::cout << "  [VRAM Tracking] Model '" << model_name << "' uses " << model_size_for_vram 
-                  << " MB. Total VRAM: " << total_vram_used_ << "/" << VRAM_BUDGET_MB << " MB" << std::endl;
+        std::cout << "  [VRAM Tracking] Model '" << model_name << "' estimated usage "
+                  << model_size_for_vram << " MB. Estimated total: " << total_vram_used_
+                  << " MB" << std::endl;
     }
 
     std::cout << "  [vDPE Complete] Model ready for inference!" << std::endl;
@@ -930,7 +1039,7 @@ bool VPIDBridge::load_and_dequantize_model(
         ModelMetadata ws_metadata;
         ws_metadata.name = extracted_model_name;
         ws_metadata.gguf_path = gguf_path;
-        ws_metadata.gguf_hash = "";  // TODO: Calculate SHA256 hash of GGUF
+        ws_metadata.gguf_hash = *gguf_hash;
         ws_metadata.quant_type = quant_type;
         ws_metadata.architecture = model_info.architecture;
         ws_metadata.tensor_count = model_info.tensors.size();
@@ -962,7 +1071,7 @@ bool VPIDBridge::load_and_dequantize_model(
 
         if (workspace_metadata_->save_model_metadata(ws_metadata)) {
             std::cout << "  ✓ Metadata saved to D:\\SnapLLM_Workspace\\" << extracted_model_name << "\\" << quant_type << std::endl;
-            std::cout << "    Model will reload instantly next time!" << std::endl;
+            std::cout << "    Model can be reloaded from its cached workspace." << std::endl;
         } else {
             std::cerr << "  Warning: Failed to save workspace metadata" << std::endl;
         }
@@ -1186,6 +1295,19 @@ llama_context* VPIDBridge::create_inference_context(
     return ctx;
 }
 
+std::pair<llama_context*, std::shared_ptr<void>>
+VPIDBridge::create_leased_inference_context(
+    const std::string& model_name,
+    int n_ctx,
+    int n_batch) {
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    auto* context = create_inference_context(model_name, n_ctx, n_batch);
+    if (!context) {
+        return {nullptr, {}};
+    }
+    return {context, context_lifetimes_.acquire(model_name)};
+}
+
 const float* VPIDBridge::get_tensor_data(
     const std::string& model_name,
     const std::string& tensor_name)
@@ -1213,14 +1335,32 @@ const TensorInfo* VPIDBridge::get_tensor_info(
 }
 
 void VPIDBridge::unload_model(const std::string& model_name) {
-    // Look up per-model cache
+    std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    context_lifetimes_.wait_for_zero(model_name);
     std::lock_guard<std::mutex> lock(models_mutex_);
-    auto it = model_caches_.find(model_name);
-    if (it != model_caches_.end()) {
-        it->second->unload_model(model_name);
-        // Optionally remove from map (keep for now to allow reload)
-        // model_caches_.erase(it);
+
+    auto model_it = loaded_models_.find(model_name);
+    if (model_it != loaded_models_.end()) {
+        llama_model_free(model_it->second);
+        loaded_models_.erase(model_it);
     }
+
+    auto cache_it = model_caches_.find(model_name);
+    if (cache_it != model_caches_.end()) {
+        cache_it->second->unload_model(model_name);
+        model_caches_.erase(cache_it);
+    }
+
+    auto vram_it = model_vram_usage_.find(model_name);
+    if (vram_it != model_vram_usage_.end()) {
+        total_vram_used_ =
+            model_lifecycle::subtract_saturating(total_vram_used_, vram_it->second);
+        model_vram_usage_.erase(vram_it);
+    }
+
+    model_access_times_.erase(model_name);
+    ram_cache_.erase(model_name);
+    hot_cache_->evict_model(model_name);
 }
 
 bool VPIDBridge::is_model_loaded(const std::string& model_name) const {
@@ -1240,18 +1380,17 @@ std::string VPIDBridge::generate_text(
     float repeat_penalty)
 {
     // Acquire inference slot (blocks if max concurrent reached)
-    acquire_inference_slot();
+    InferenceSlotGuard inference_slot(*this);
 
     std::cout << "\n=== Phase 4: Token Generation with vPID Tensors ===" << std::endl;
     std::cout << "Model: " << model_name << std::endl;
-    std::cout << "Prompt: \"" << prompt << "\"" << std::endl;
+    std::cout << "Prompt bytes: " << prompt.size() << std::endl;
     std::cout << "Max tokens: " << max_tokens << std::endl;
 
     // Create inference context
     llama_context* ctx = create_inference_context(model_name, 4096, 512);
     if (!ctx) {
         std::cerr << "Failed to create inference context for generation" << std::endl;
-        release_inference_slot();
         return "";
     }
 
@@ -1267,7 +1406,6 @@ std::string VPIDBridge::generate_text(
 
     if (!model) {
         llama_free(ctx);
-        release_inference_slot();
         return "";
     }
 
@@ -1318,7 +1456,6 @@ std::string VPIDBridge::generate_text(
     if (llama_tokenize(vocab, formatted_prompt.c_str(), formatted_prompt.size(), tokens.data(), tokens.size(), true, true) < 0) {
         std::cerr << "Tokenization failed!" << std::endl;
         llama_free(ctx);
-        release_inference_slot();
         return "";
     }
 
@@ -1378,7 +1515,6 @@ std::string VPIDBridge::generate_text(
 
         llama_free(ctx);
 
-        release_inference_slot();
         return "";
 
 
@@ -1510,7 +1646,6 @@ std::string VPIDBridge::generate_text(
     llama_sampler_free(smpl);
     llama_free(ctx);
 
-    release_inference_slot();
     return result;
 }
 
@@ -1583,14 +1718,14 @@ std::vector<BatchResult> VPIDBridge::generate_batch_parallel(
     float default_repeat_penalty)
 {
     // Acquire inference slot (blocks if max concurrent reached)
-    acquire_inference_slot();
+    InferenceSlotGuard inference_slot(*this);
 
     auto total_start = std::chrono::high_resolution_clock::now();
 
     const int n_items = static_cast<int>(items.size());
     std::vector<BatchResult> all_results(n_items);
 
-    if (n_items == 0) { release_inference_slot(); return all_results; }
+    if (n_items == 0) { return all_results; }
 
     // Process in chunks of MAX_PARALLEL_SEQUENCES
     for (int offset = 0; offset < n_items; offset += MAX_PARALLEL_SEQUENCES) {
@@ -1733,22 +1868,12 @@ std::vector<BatchResult> VPIDBridge::generate_batch_parallel(
 
         llama_context* ctx = llama_init_from_model(model, ctx_params);
         if (!ctx) {
-            std::cerr << "[Batch] Failed to create multi-sequence context, falling back to sequential" << std::endl;
-            // Fallback: process sequentially
+            std::cerr << "[Batch] Failed to create multi-sequence context" << std::endl;
             for (int i = 0; i < chunk_size; i++) {
                 if (seqs[i].finished) continue;
-                const auto& item = items[offset + i];
-                auto seq_start = std::chrono::high_resolution_clock::now();
-                std::string text = generate_text(model_name, item.raw_prompt.empty() ?
-                    (item.messages.empty() ? "" : item.messages.back().content) : item.raw_prompt,
-                    item.max_tokens, nullptr,
-                    item.temperature.value_or(default_temp),
-                    item.top_p.value_or(default_top_p),
-                    item.top_k.value_or(default_top_k),
-                    item.repeat_penalty.value_or(default_repeat_penalty));
-                auto seq_end = std::chrono::high_resolution_clock::now();
-                all_results[offset + i].generated_text = text;
-                all_results[offset + i].latency_ms = std::chrono::duration<double, std::milli>(seq_end - seq_start).count();
+                all_results[offset + i].success = false;
+                all_results[offset + i].error =
+                    "Failed to create multi-sequence inference context";
             }
             continue;
         }
@@ -1996,7 +2121,6 @@ std::vector<BatchResult> VPIDBridge::generate_batch_parallel(
     double total_ms = std::chrono::duration<double, std::milli>(total_end - total_start).count();
     std::cout << "[Batch] All " << n_items << " prompts complete in " << total_ms << "ms" << std::endl;
 
-    release_inference_slot();
     return all_results;
 }
 
@@ -2011,13 +2135,12 @@ size_t VPIDBridge::generate_text_streaming(
     float repeat_penalty)
 {
     // Acquire inference slot (blocks if max concurrent reached)
-    acquire_inference_slot();
+    InferenceSlotGuard inference_slot(*this);
 
     // Create inference context
     llama_context* ctx = create_inference_context(model_name, 4096, 512);
     if (!ctx) {
         std::cerr << "Failed to create inference context for streaming" << std::endl;
-        release_inference_slot();
         callback("", -1, true);  // Signal error
         return 0;
     }
@@ -2034,7 +2157,6 @@ size_t VPIDBridge::generate_text_streaming(
 
     if (!model) {
         llama_free(ctx);
-        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -2067,7 +2189,6 @@ size_t VPIDBridge::generate_text_streaming(
     if (llama_tokenize(vocab, formatted_prompt.c_str(), formatted_prompt.size(),
                        tokens.data(), tokens.size(), true, true) < 0) {
         llama_free(ctx);
-        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -2104,7 +2225,6 @@ size_t VPIDBridge::generate_text_streaming(
 
     if (prefill_failed) {
         llama_free(ctx);
-        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -2159,7 +2279,6 @@ size_t VPIDBridge::generate_text_streaming(
     llama_sampler_free(smpl);
     llama_free(ctx);
 
-    release_inference_slot();
     return n_gen;
 }
 
@@ -2175,16 +2294,15 @@ std::string VPIDBridge::generate_with_injected_kv(
     float repeat_penalty)
 {
     // Acquire inference slot (blocks if max concurrent reached)
-    acquire_inference_slot();
+    InferenceSlotGuard inference_slot(*this);
 
     std::cout << "\n[vPID L2] generate_with_injected_kv starting..." << std::endl;
     std::cout << "  Model: " << model_name << std::endl;
     std::cout << "  Context tokens (from KV cache): " << context_token_count << std::endl;
-    std::cout << "  Query: \"" << query.substr(0, 50) << (query.length() > 50 ? "..." : "") << "\"" << std::endl;
+    std::cout << "  Query bytes: " << query.size() << std::endl;
 
     if (!ctx) {
         std::cerr << "[vPID L2] Error: Context is null" << std::endl;
-        release_inference_slot();
         return "";
     }
 
@@ -2200,14 +2318,12 @@ std::string VPIDBridge::generate_with_injected_kv(
 
     if (!model) {
         std::cerr << "[vPID L2] Error: Model not found: " << model_name << std::endl;
-        release_inference_slot();
         return "";
     }
 
     const llama_vocab* vocab = llama_model_get_vocab(model);
     if (!vocab) {
         std::cerr << "[vPID L2] Error: Could not get vocabulary" << std::endl;
-        release_inference_slot();
         return "";
     }
 
@@ -2251,14 +2367,13 @@ std::string VPIDBridge::generate_with_injected_kv(
 
     if (n_query_tokens < 0) {
         std::cerr << "[vPID L2] Error: Failed to tokenize query" << std::endl;
-        release_inference_slot();
         return "";
     }
     query_tokens.resize(n_query_tokens);
     std::cout << "  Query tokens: " << n_query_tokens << std::endl;
 
     // Process query tokens starting AFTER context tokens
-    // This is the key to O(1) context - we skip prefill of context!
+    // Reuse the cached prefix so it does not need to be prefilled again.
     int start_pos = context_token_count;
     std::cout << "  Starting position: " << start_pos << " (skipping " << context_token_count << " context tokens)" << std::endl;
 
@@ -2286,7 +2401,6 @@ std::string VPIDBridge::generate_with_injected_kv(
         if (llama_decode(ctx, batch) != 0) {
             std::cerr << "[vPID L2] Error: Failed to decode query tokens at position " << n_processed << std::endl;
             llama_batch_free(batch);
-            release_inference_slot();
             return "";
         }
         llama_batch_free(batch);
@@ -2361,7 +2475,6 @@ std::string VPIDBridge::generate_with_injected_kv(
     // Cleanup sampler (NOTE: caller manages context lifecycle)
     llama_sampler_free(smpl);
 
-    release_inference_slot();
     return result;
 }
 
@@ -2378,16 +2491,15 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
     float repeat_penalty)
 {
     // Acquire inference slot (blocks if max concurrent reached)
-    acquire_inference_slot();
+    InferenceSlotGuard inference_slot(*this);
 
     std::cout << "\n[vPID L2 Streaming] Starting with injected KV cache..." << std::endl;
     std::cout << "  Model: " << model_name << std::endl;
     std::cout << "  Context tokens (from KV cache): " << context_token_count << std::endl;
-    std::cout << "  Query: \"" << query.substr(0, 50) << (query.length() > 50 ? "..." : "") << "\"" << std::endl;
+    std::cout << "  Query bytes: " << query.size() << std::endl;
 
     if (!ctx) {
         std::cerr << "[vPID L2 Streaming] Error: Context is null" << std::endl;
-        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -2404,7 +2516,6 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
 
     if (!model) {
         std::cerr << "[vPID L2 Streaming] Error: Model not found: " << model_name << std::endl;
-        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -2412,7 +2523,6 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
     const llama_vocab* vocab = llama_model_get_vocab(model);
     if (!vocab) {
         std::cerr << "[vPID L2 Streaming] Error: Could not get vocabulary" << std::endl;
-        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -2457,7 +2567,6 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
 
     if (n_query_tokens < 0) {
         std::cerr << "[vPID L2 Streaming] Error: Failed to tokenize query" << std::endl;
-        release_inference_slot();
         callback("", -1, true);
         return 0;
     }
@@ -2465,7 +2574,7 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
     std::cout << "  Query tokens: " << n_query_tokens << std::endl;
 
     // Process query tokens starting AFTER context tokens
-    // This is the key to O(1) context - we skip prefill of context!
+    // Reuse the cached prefix so it does not need to be prefilled again.
     int start_pos = context_token_count;
     std::cout << "  Starting position: " << start_pos << " (skipping " << context_token_count << " context tokens)" << std::endl;
 
@@ -2491,7 +2600,6 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
         if (llama_decode(ctx, batch) != 0) {
             std::cerr << "[vPID L2 Streaming] Error: Failed to decode query tokens" << std::endl;
             llama_batch_free(batch);
-            release_inference_slot();
             callback("", -1, true);
             return 0;
         }
@@ -2556,7 +2664,6 @@ size_t VPIDBridge::generate_streaming_with_injected_kv(
     // Cleanup sampler (NOTE: caller manages context lifecycle)
     llama_sampler_free(smpl);
 
-    release_inference_slot();
     return n_gen;
 }
 
@@ -2581,6 +2688,7 @@ void VPIDBridge::set_max_concurrent_inferences(int max_concurrent) {
 }
 
 void VPIDBridge::acquire_inference_slot() {
+    lifecycle_mutex_.lock_shared();
     std::unique_lock<std::mutex> lock(inference_mutex_);
     inference_cv_.wait(lock, [this] {
         return active_inferences_ < max_concurrent_inferences_;
@@ -2591,9 +2699,12 @@ void VPIDBridge::acquire_inference_slot() {
 void VPIDBridge::release_inference_slot() {
     {
         std::lock_guard<std::mutex> lock(inference_mutex_);
-        active_inferences_--;
+        if (active_inferences_ > 0) {
+            active_inferences_--;
+        }
     }
     inference_cv_.notify_one();
+    lifecycle_mutex_.unlock_shared();
 }
 
 void VPIDBridge::set_validation_config(const ValidationConfig& config) {
@@ -2678,7 +2789,7 @@ std::shared_ptr<DequantCache> VPIDBridge::get_or_create_cache(
 
     // Create VPIDWorkspace with dynamic size
     // use_direct_io = TRUE for controlled RAM usage with tensor cache
-    // use_direct_io = FALSE for memory mapping (enables external tensors for <1ms switching)
+    // use_direct_io = FALSE so memory mapping can back external tensors.
     // cache_budget = 4GB for tensor cache (used when Direct I/O is enabled)
     bool use_direct_io = false;  // FALSE = memory mapping for FAST external tensor loading!
     size_t cache_budget_bytes = 4ULL * 1024 * 1024 * 1024;  // 4GB cache
@@ -2723,7 +2834,7 @@ std::optional<VPIDBridge::BridgeModelInfo> VPIDBridge::get_model_info(const std:
     llama_model* model = it->second;
 
     BridgeModelInfo info;
-    info.architecture = "llama";  // TODO: Get from model metadata
+    info.architecture = "unknown";
 
     // Get model info from llama.cpp (using correct API names)
     info.n_layers = llama_model_n_layer(model);
@@ -2733,28 +2844,27 @@ std::optional<VPIDBridge::BridgeModelInfo> VPIDBridge::get_model_info(const std:
     info.context_length = llama_model_n_ctx_train(model);
 
     // Estimate parameter count from embedding dimension and layers
-    info.parameters = static_cast<uint64_t>(n_embd) * n_embd * info.n_layers * 4;  // Rough estimate
+    info.parameters = 0;
+    info.n_gpu_layers = 0;
+    info.vpid = 0;
 
     // Get VRAM usage
     auto vram_it = model_vram_usage_.find(model_name);
     if (vram_it != model_vram_usage_.end()) {
         info.memory_bytes = vram_it->second * 1024 * 1024;  // Convert MB to bytes
-        info.n_gpu_layers = info.n_layers;  // Assume all layers on GPU if VRAM is used
     }
-
-    // Generate vPID from hash of model name
-    std::hash<std::string> hasher;
-    info.vpid = static_cast<uint32_t>(hasher(model_name) & 0xFFFFFFFF);
 
     return info;
 }
 
 size_t VPIDBridge::get_gpu_memory_used() const {
+    std::lock_guard<std::mutex> lock(models_mutex_);
     return total_vram_used_ * 1024 * 1024;  // Convert MB to bytes
 }
 
 size_t VPIDBridge::get_gpu_memory_total() const {
-    return VRAM_BUDGET_MB * 1024 * 1024;  // Convert MB to bytes
+    std::lock_guard<std::mutex> lock(models_mutex_);
+    return configured_vram_budget_mb_ * 1024 * 1024;  // 0 means unknown/unconfigured
 }
 
 } // namespace snapllm

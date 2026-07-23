@@ -105,7 +105,7 @@ export const Header: React.FC = () => {
                 </span>
                 {activeModel && (
                   <Badge variant="success" dot>
-                    {activeModel.performance?.tokensPerSecond?.toFixed(0) || activeModel.throughput_toks?.toFixed(0) || '—'} tok/s
+                    {activeModel.performance?.tokensPerSecond?.toFixed(0) || '—'} tok/s
                   </Badge>
                 )}
               </div>
@@ -120,7 +120,7 @@ export const Header: React.FC = () => {
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-warning-500" />
             <span className="text-xs font-medium text-warning-600 dark:text-warning-400">
-              &lt;1ms
+              loaded
             </span>
             <ChevronDown className="w-4 h-4 text-surface-400 group-hover:text-surface-600" />
           </div>

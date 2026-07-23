@@ -9,11 +9,19 @@ services:
         SNAPLLM_ENABLE_MULTIMODAL: "ON"
     ports:
       - "127.0.0.1:6930:6930"
+    command: ["snapllm", "--server", "--host", "0.0.0.0", "--port", "6930", "--workspace-root", "/workspace"]
     environment:
-      SNAPLLM_HOST: "0.0.0.0"
-      SNAPLLM_PORT: "6930"
-      SNAPLLM_WORKSPACE_ROOT: "/workspace"
+      SNAPLLM_API_KEY: "${SNAPLLM_API_KEY:?Set SNAPLLM_API_KEY to at least 32 visible ASCII characters}"
+      SNAPLLM_NETWORK_GUARD: "loopback-port-publish"
       SNAPLLM_MODELS_PATH: "/models"
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
     volumes:
       - ./workspace:/workspace
-      - ./models:/models
+      - ./models:/models:ro
