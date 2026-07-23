@@ -7,6 +7,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-07-23
+
+### Fixed
+
+- Web UI launchers now open Vite on `localhost:9780`; the API remains on
+  `localhost:6930`, preventing the API-only root from being mistaken for the UI.
+
 ## [1.3.1] - 2026-07-23
 
 ### Added

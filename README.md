@@ -86,7 +86,7 @@ Select A or B without an avoidable reload while both remain resident
 | **OpenAI-Compatible API** | Drop-in replacement for OpenAI API |
 | **Multi-Modal Support** | LLM, Vision (VLM), and Stable Diffusion models |
 | **KV Cache Persistence** | Persist context state and use indexed cache lookup; generation work still depends on query and context size |
-| **Bundled Web UI** | Built-in React dashboard served at `localhost:6930` with auto browser launch |
+| **Web UI** | React dashboard served by Vite at `localhost:9780`; the API listens on `localhost:6930` |
 | **Desktop Application** | Beautiful React-based UI for model management |
 
 ### Supported Model Types
@@ -268,7 +268,9 @@ curl -X POST http://localhost:6930/v1/chat/completions \
 
 ### 5. Use the Web UI
 
-The server automatically opens a browser to the built-in dashboard at `http://localhost:6930/` when started.
+`Start_Server.bat` starts the API and, when the desktop binary is unavailable, starts the Vite web UI at
+`http://localhost:9780`. The API health endpoint remains available at
+`http://localhost:6930/health`.
 
 To run the standalone desktop app (development mode):
 

@@ -30,7 +30,7 @@ if not exist node_modules (
 )
 
 echo.
-echo Starting SnapLLM Desktop App on http://localhost:5173
+echo Starting SnapLLM Web UI on http://localhost:9780
 echo Make sure the API server is running on http://localhost:6930
 echo Press Ctrl+C to stop
 echo.

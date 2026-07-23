@@ -153,7 +153,7 @@ build_gpu\bin\snapllm.exe --server --port 6930
 You should see:
 ```
 ================================================================
-  SnapLLM HTTP Server v1.3.1
+  SnapLLM HTTP Server v1.3.2
 ================================================================
   Listening on: http://127.0.0.1:6930
   Workspace:    C:\Users\YourName\SnapLLM_Workspace  (Windows)
@@ -180,7 +180,7 @@ curl http://localhost:6930/health
 
 Response:
 ```json
-{"status": "ok", "version": "1.3.1"}
+{"status": "ok", "version": "1.3.2"}
 ```
 
 ---
@@ -421,7 +421,7 @@ bin\snapllm.exe --server --port 6930 --load-model mymodel "C:\Models\llama-3-8b.
 Wait until you see:
 ```
 ================================================================
-  SnapLLM HTTP Server v1.3.1
+  SnapLLM HTTP Server v1.3.2
 ================================================================
   Listening on: http://127.0.0.1:6930
   Workspace:    C:\Users\YourName\SnapLLM_Workspace
@@ -432,7 +432,7 @@ Wait until you see:
 Verify the backend is running:
 ```bash
 curl http://localhost:6930/health
-# Should return: {"status":"ok","version":"1.3.1"...}
+# Should return: {"status":"ok","version":"1.3.2"...}
 ```
 
 ### Step 2: Start the Desktop UI
@@ -530,6 +530,8 @@ npm run dev &
 ### Troubleshooting UI Issues
 
 **UI shows "Cannot connect to server"**
+- Open the web UI at `http://localhost:9780`; `http://localhost:6930/` is the API root, not the UI.
+- Start the web UI with `start_frontend.bat` after starting the backend.
 - Ensure backend is running on port 6930
 - Check: `curl http://localhost:6930/health`
 - Verify firewall isn't blocking port 6930

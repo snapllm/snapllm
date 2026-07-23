@@ -18,7 +18,7 @@ echo.
 
 :: Get version from argument or use default
 set "VERSION=%~1"
-if "%VERSION%"=="" set "VERSION=1.3.1"
+if "%VERSION%"=="" set "VERSION=1.3.2"
 powershell -NoProfile -Command "if ($env:VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { exit 1 }"
 if errorlevel 1 (
     echo [ERROR] Version must match MAJOR.MINOR.PATCH.

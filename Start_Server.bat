@@ -91,9 +91,11 @@ if defined UI_PATH (
     echo [INFO] Launching Desktop UI in 3 seconds...
     start "" cmd /c "timeout /t 3 /nobreak >nul && start "" "%UI_PATH%""
 ) else (
-    echo [INFO] Desktop UI not built. Opening browser instead...
-    echo        (Run build_desktop.bat to build the Desktop UI)
-    start "" cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:%PORT%"
+    echo [INFO] Desktop UI not built. Starting the Vite Web UI...
+    echo        Web UI: http://localhost:9780
+    echo        API:    http://localhost:%PORT%
+    start "SnapLLM Web UI" "%ComSpec%" /c call "%SCRIPT_DIR%start_frontend.bat"
+    start "" cmd /c "timeout /t 5 /nobreak >nul && start http://localhost:9780"
 )
 
 echo.
