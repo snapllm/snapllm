@@ -7,6 +7,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-07-23
+
+### Fixed
+
+- Ubuntu 24.04 Tauri CI now installs the available WebKitGTK 4.1 development package.
+
 ## [1.3.3] - 2026-07-23
 
 ### Fixed
