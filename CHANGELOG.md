@@ -7,6 +7,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.3.6] - 2026-07-23
+
+### Fixed
+
+- Preserve Linux optional npm dependency entries in the committed lockfile so
+  GitHub Ubuntu `npm ci` remains reproducible.
+
 ## [1.3.5] - 2026-07-23
 
 ### Fixed
