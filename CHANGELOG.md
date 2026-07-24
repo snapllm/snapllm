@@ -7,6 +7,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.3.7] - 2026-07-23
+
+### Fixed
+
+- Ubuntu Tauri CI now installs the libsoup 2 development package required by
+  the Tauri 1 WebKit bindings.
+
 ## [1.3.6] - 2026-07-23
 
 ### Fixed
