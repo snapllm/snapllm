@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.6.0] - 2026-07-24
+
+- Update the locked Wry runtime to 0.24.12, which correctly imports WebKitGTK settings extension traits.
+
 ## [1.5.0] - 2026-07-24
 
 - Enable WebKitGTK v2.36 APIs required by the Tauri desktop runtime on current Linux runners.
