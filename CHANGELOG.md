@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.4.0] - 2026-07-24
+
+- Use Ubuntu 24.04 WebKitGTK 4.1 libraries with Tauri 1.x-compatible pkg-config aliases in desktop CI.
+
 ## [1.3.9] - 2026-07-24
 
 - Run the Tauri desktop CI job on Ubuntu 22.04, which provides the WebKitGTK 4.0 development packages required by Tauri 1.x.
