@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.9] - 2026-07-24
+
+- Run the Tauri desktop CI job on Ubuntu 22.04, which provides the WebKitGTK 4.0 development packages required by Tauri 1.x.
+
 ## [1.3.8] - 2026-07-24
 
 - Fix Linux desktop CI by installing the JavaScriptCore GTK development package required by Tauri.
