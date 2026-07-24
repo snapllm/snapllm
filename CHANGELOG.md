@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.8.0] - 2026-07-24
+
+- Add WebKitGTK 4.0 linker-name compatibility aliases for Tauri 1.x on Ubuntu 24.04.
+
 ## [1.7.0] - 2026-07-24
 
 - Pin the portable Cargo lockfile to the published autocfg 1.5.0 release.

@@ -180,6 +180,11 @@ jobs:
               sudo ln -sf "${pc}-4.1.pc" "/usr/lib/x86_64-linux-gnu/pkgconfig/${pc}-4.0.pc"
             fi
           done
+          for lib in javascriptcoregtk webkit2gtk; do
+            if [ -e "/usr/lib/x86_64-linux-gnu/lib${lib}-4.1.so" ]; then
+              sudo ln -sf "lib${lib}-4.1.so" "/usr/lib/x86_64-linux-gnu/lib${lib}-4.0.so"
+            fi
+          done
       - name: Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - name: Rust check
