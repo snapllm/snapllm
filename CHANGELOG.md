@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.9.0] - 2026-07-24
+
+- Update `serde_with`, `tar`, and `rand` to their patched security releases.
+
 ## [1.8.0] - 2026-07-24
 
 - Add WebKitGTK 4.0 linker-name compatibility aliases for Tauri 1.x on Ubuntu 24.04.
