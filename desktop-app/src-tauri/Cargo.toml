@@ -1,6 +1,6 @@
 [package]
 name = "snapllm-desktop"
-version = "1.4.0"
+version = "1.5.0"
 description = "SnapLLM Desktop - Multi-Model LLM Serving Platform"
 authors = ["SnapLLM Team"]
 license = "MIT"
@@ -14,6 +14,8 @@ tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
 tauri = { version = "1.5", features = ["dialog-open", "fs-copy-file", "fs-exists", "fs-read-dir"] }
+# wry 0.24 uses WebKitGTK settings APIs introduced after its default v2_22 feature.
+webkit2gtk = { version = "0.18.2", features = ["v2_36"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 

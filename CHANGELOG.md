@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.0] - 2026-07-24
+
+- Enable WebKitGTK v2.36 APIs required by the Tauri desktop runtime on current Linux runners.
+
 ## [1.4.0] - 2026-07-24
 
 - Use Ubuntu 24.04 WebKitGTK 4.1 libraries with Tauri 1.x-compatible pkg-config aliases in desktop CI.
