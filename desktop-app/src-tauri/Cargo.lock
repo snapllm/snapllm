@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "autocfg"
-version = "1.6.0"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
@@ -2581,7 +2581,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "snapllm-desktop"
-version = "1.5.0"
+version = "1.7.0"
 dependencies = [
  "serde",
  "serde_json",

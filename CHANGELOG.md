@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.7.0] - 2026-07-24
+
+- Pin the portable Cargo lockfile to the published autocfg 1.5.0 release.
+
 ## [1.6.0] - 2026-07-24
 
 - Update the locked Wry runtime to 0.24.12, which correctly imports WebKitGTK settings extension traits.
