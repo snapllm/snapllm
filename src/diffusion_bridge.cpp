@@ -472,7 +472,9 @@ GenerationResult DiffusionBridge::generate_image(
     for (int i = 0; i < params.batch_size; i++) {
         sd_image_t& img = images[i];
         if (img.data) {
-            size_t data_size = img.width * img.height * img.channel;
+            size_t data_size = static_cast<size_t>(img.width) *
+                               static_cast<size_t>(img.height) *
+                               static_cast<size_t>(img.channel);
             std::vector<uint8_t> img_data(img.data, img.data + data_size);
             result.images.push_back(std::move(img_data));
             free(img.data);

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.12.0] - 2026-07-25
+
+- Fix all SnapLLM-owned instances of the CodeQL integer-multiplication-cast warning.
+
 ## [1.11.0] - 2026-07-25
 
 - Configure CodeQL to scan SnapLLM product code while excluding vendored third-party dependencies.

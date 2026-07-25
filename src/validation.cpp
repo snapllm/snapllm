@@ -54,7 +54,7 @@ TensorStats TensorValidator::validate(
             if (val < stats.min_value) stats.min_value = val;
             if (val > stats.max_value) stats.max_value = val;
             sum += val;
-            sum_sq += val * val;
+            sum_sq += static_cast<double>(val) * static_cast<double>(val);
         }
     }
 

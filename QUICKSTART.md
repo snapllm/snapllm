@@ -153,7 +153,7 @@ build_gpu\bin\snapllm.exe --server --port 6930
 You should see:
 ```
 ================================================================
-  SnapLLM HTTP Server v1.11.0
+  SnapLLM HTTP Server v1.12.0
 ================================================================
   Listening on: http://127.0.0.1:6930
   Workspace:    C:\Users\YourName\SnapLLM_Workspace  (Windows)
@@ -180,7 +180,7 @@ curl http://localhost:6930/health
 
 Response:
 ```json
-{"status": "ok", "version": "1.11.0"}
+{"status": "ok", "version": "1.12.0"}
 ```
 
 ---
@@ -421,7 +421,7 @@ bin\snapllm.exe --server --port 6930 --load-model mymodel "C:\Models\llama-3-8b.
 Wait until you see:
 ```
 ================================================================
-  SnapLLM HTTP Server v1.11.0
+  SnapLLM HTTP Server v1.12.0
 ================================================================
   Listening on: http://127.0.0.1:6930
   Workspace:    C:\Users\YourName\SnapLLM_Workspace
@@ -432,7 +432,7 @@ Wait until you see:
 Verify the backend is running:
 ```bash
 curl http://localhost:6930/health
-# Should return: {"status":"ok","version":"1.11.0"...}
+# Should return: {"status":"ok","version":"1.12.0"...}
 ```
 
 ### Step 2: Start the Desktop UI
