@@ -1,0 +1,10 @@
+name: SnapLLM product CodeQL
+
+# Third-party engines and vendored headers are not SnapLLM product code. They
+# are maintained upstream and are intentionally excluded from product scans;
+# first-party adapters and integrations remain covered by CodeQL.
+paths-ignore:
+  - external/**
+  - '**/node_modules/**'
+  - '**/target/**'
+  - '**/dist/**'

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.11.0] - 2026-07-25
+
+- Configure CodeQL to scan SnapLLM product code while excluding vendored third-party dependencies.
+
 ## [1.10.0] - 2026-07-25
 
 - Prevent 32-bit intermediate overflow in GPT-J context-size calculations.
