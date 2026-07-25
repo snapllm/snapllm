@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.15.0] - 2026-07-25
+
+- Improve inference burst handling with bounded HTTP backpressure and request-budget queue waits.
+
 ## [1.14.0] - 2026-07-25
 
 - Add a narrowly scoped React Router RSC audit exception and pin `brace-expansion` to 5.0.8.

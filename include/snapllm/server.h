@@ -76,7 +76,7 @@ struct ServerConfig {
     std::vector<std::string> allowed_origins; ///< Exact additional browser origins
     size_t max_payload_bytes = 32 * 1024 * 1024; ///< Maximum HTTP request body (32 MiB)
     int timeout_seconds = 600;               ///< Request timeout
-    int max_concurrent_requests = 8;         ///< Max concurrent requests (capped to 2 for GPU inference)
+    int max_concurrent_requests = 8;         ///< HTTP worker count; inference is GPU-gated with bounded backpressure
     int max_models = 10;                     ///< UI default: max models allowed
     int default_ram_budget_mb = 16384;       ///< UI default RAM budget
     std::string default_strategy = "balanced"; ///< UI default strategy
@@ -166,7 +166,8 @@ private:
     std::atomic<uint64_t> total_errors_{0};
 
     // HTTP-level inference gate: prevents concurrent inference from crashing GPU
-    // Requests exceeding the limit get queued briefly, then rejected with 503
+    // Requests wait within the configured request budget; overload is rejected
+    // after the bounded HTTP queue is full.
     std::mutex inference_gate_mutex_;
     std::condition_variable inference_gate_cv_;
     int active_inference_count_ = 0;

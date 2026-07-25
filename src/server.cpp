@@ -616,7 +616,10 @@ SnapLLMServer::SnapLLMServer(const ServerConfig& config)
         throw std::invalid_argument("HTTP worker count must be between 1 and 128");
     }
     const size_t http_workers = static_cast<size_t>(config_.max_concurrent_requests);
-    const size_t maximum_queued_requests = http_workers * 4;
+    // Keep admission bounded, but allow a normal burst to drain behind the
+    // serialized GPU inference slot. Requests beyond this queue are rejected
+    // instead of consuming unbounded memory.
+    const size_t maximum_queued_requests = std::min<size_t>(http_workers * 8, 256);
     svr_->new_task_queue = [http_workers, maximum_queued_requests] {
         return new httplib::ThreadPool(http_workers, maximum_queued_requests);
     };
@@ -1505,7 +1508,7 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
     total_requests_++;
 
     // === INFERENCE GATE: Acquire slot before ANY model/GPU operations ===
-    if (!acquire_inference_gate(30000)) {
+    if (!acquire_inference_gate(config_.timeout_seconds * 1000)) {
         total_errors_++;
         send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
                    "server_busy", 503);
@@ -1913,7 +1916,7 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
     total_requests_++;
 
     // === INFERENCE GATE: Acquire slot before ANY model/GPU operations ===
-    if (!acquire_inference_gate(30000)) {
+    if (!acquire_inference_gate(config_.timeout_seconds * 1000)) {
         total_errors_++;
         json error = {
             {"type", "error"},
@@ -3441,7 +3444,7 @@ void SnapLLMServer::handle_generate(const httplib::Request& req, httplib::Respon
     total_requests_++;
 
     // === INFERENCE GATE ===
-    if (!acquire_inference_gate(30000)) {
+    if (!acquire_inference_gate(config_.timeout_seconds * 1000)) {
         total_errors_++;
         send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
                    "server_busy", 503);
@@ -3547,7 +3550,7 @@ void SnapLLMServer::handle_generate_batch(const httplib::Request& req, httplib::
     total_requests_++;
 
     // === INFERENCE GATE ===
-    if (!acquire_inference_gate(60000)) {  // 60s timeout for batch
+    if (!acquire_inference_gate(config_.timeout_seconds * 1000)) {  // request budget covers queue wait and generation
         total_errors_++;
         send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
                    "server_busy", 503);
@@ -3792,7 +3795,7 @@ void SnapLLMServer::handle_diffusion_generate(const httplib::Request& req, httpl
     total_requests_++;
 
     // === INFERENCE GATE ===
-    if (!acquire_inference_gate(60000)) {
+    if (!acquire_inference_gate(config_.timeout_seconds * 1000)) {
         total_errors_++;
         send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
                    "server_busy", 503);
@@ -3961,7 +3964,7 @@ void SnapLLMServer::handle_vision_generate(const httplib::Request& req, httplib:
     total_requests_++;
 
     // === INFERENCE GATE ===
-    if (!acquire_inference_gate(60000)) {
+    if (!acquire_inference_gate(config_.timeout_seconds * 1000)) {
         total_errors_++;
         send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
                    "server_busy", 503);
@@ -4220,7 +4223,7 @@ void SnapLLMServer::handle_websocket_upgrade(const httplib::Request& req, httpli
 
 void SnapLLMServer::handle_context_ingest(const httplib::Request& req, httplib::Response& res) {
     // === INFERENCE GATE: Context ingestion runs inference to build KV cache ===
-    if (!acquire_inference_gate(60000)) {
+    if (!acquire_inference_gate(config_.timeout_seconds * 1000)) {
         total_errors_++;
         send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
                    "server_busy", 503);
@@ -4433,7 +4436,7 @@ void SnapLLMServer::handle_context_get(const httplib::Request& req, httplib::Res
 
 void SnapLLMServer::handle_context_query(const httplib::Request& req, httplib::Response& res, const std::string& context_id) {
     // === INFERENCE GATE: Context query runs inference ===
-    if (!acquire_inference_gate(30000)) {
+    if (!acquire_inference_gate(config_.timeout_seconds * 1000)) {
         total_errors_++;
         send_error(res, "Server busy - too many concurrent inference requests. Please retry.",
                    "server_busy", 503);
