@@ -22,12 +22,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "AroorA AI Lab\0"
             VALUE "FileDescription", "SnapLLM - Multi-Model LLM Inference Engine\0"
-            VALUE "FileVersion", "1.15.0.0\0"
+            VALUE "FileVersion", "1.16.0.0\0"
             VALUE "InternalName", "snapllm\0"
             VALUE "LegalCopyright", "MIT License\0"
             VALUE "OriginalFilename", "snapllm.exe\0"
             VALUE "ProductName", "SnapLLM\0"
-            VALUE "ProductVersion", "1.15.0.0\0"
+            VALUE "ProductVersion", "1.16.0.0\0"
         END
     END
     BLOCK "VarFileInfo"

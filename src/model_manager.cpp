@@ -132,6 +132,21 @@ bool ModelManager::switch_model(const std::string& name) {
     return true;
 }
 
+ModelType ModelManager::get_model_type(const std::string& name) const {
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
+    auto it = model_paths_.find(name);
+    return it == model_paths_.end() ? ModelType::UNKNOWN : detect_model_type(it->second);
+}
+
+bool ModelManager::rebalance_gpu() {
+    return bridge_ && bridge_->rebalance_gpu_memory();
+}
+
+bool ModelManager::recover_model(const std::string& name) {
+    std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+    return ensure_model_in_gpu_locked(name);
+}
+
 std::string ModelManager::generate(const std::string& prompt, size_t max_tokens, size_t* actual_tokens,
                                    float temperature, float top_p, int top_k, float repeat_penalty) {
     const std::string selected_model = get_current_model();

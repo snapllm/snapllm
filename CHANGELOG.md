@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.0] - 2026-07-25
+
+- Add deterministic production request routing with wrong-modality rejection.
+- Add GPU pressure rebalancing and model recovery APIs.
+- Add opt-in end-to-end concurrent HTTP throughput benchmark.
+- Add regression coverage for routing and cleanup-safe bounded concurrency.
+
 ## [1.15.0] - 2026-07-25
 
 - Improve inference burst handling with bounded HTTP backpressure and request-budget queue waits.

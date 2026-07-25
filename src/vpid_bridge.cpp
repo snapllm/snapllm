@@ -2867,4 +2867,18 @@ size_t VPIDBridge::get_gpu_memory_total() const {
     return configured_vram_budget_mb_ * 1024 * 1024;  // 0 means unknown/unconfigured
 }
 
+bool VPIDBridge::rebalance_gpu_memory() {
+    std::lock_guard<std::mutex> lock(models_mutex_);
+    if (configured_vram_budget_mb_ == 0) {
+        return false; // Capacity is unknown; never evict speculatively.
+    }
+    const size_t high_watermark = (configured_vram_budget_mb_ * 85) / 100;
+    bool changed = false;
+    while (total_vram_used_ > high_watermark && !loaded_models_.empty()) {
+        if (evict_lru_model().empty()) break;
+        changed = true;
+    }
+    return changed || total_vram_used_ <= high_watermark;
+}
+
 } // namespace snapllm

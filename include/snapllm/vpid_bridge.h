@@ -311,6 +311,9 @@ public:
      */
     size_t get_gpu_memory_total() const;
 
+    /** Evict least-recently-used residents when configured VRAM is pressured. */
+    bool rebalance_gpu_memory();
+
     /**
      * @brief Generate text from a prompt (Phase 4)
      *

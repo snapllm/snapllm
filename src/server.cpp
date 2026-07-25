@@ -39,6 +39,7 @@
 #include "snapllm/websocket.h"
 #include "snapllm/workspace_paths.h"
 #include "snapllm/model_types.h"
+#include "snapllm/request_router.h"
 
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -1527,11 +1528,35 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
         std::string validation_error;
         std::string model;
         if (!read_bounded_string(
-                body, "model", manager_->get_current_model(),
+                body, "model", "",
                 limits::kMaximumStringBytes, true, model, validation_error)) {
             send_error(res, validation_error);
             return;
         }
+        RouteRequest route_request;
+        route_request.requested_model = model;
+        if (body.contains("routing") && body["routing"].is_object()) {
+            if (!read_bounded_string(body["routing"], "task", "", limits::kMaximumStringBytes,
+                                     true, route_request.task, validation_error) ||
+                !read_bounded_string(body["routing"], "modality", "text", limits::kMaximumStringBytes,
+                                     true, route_request.modality, validation_error)) {
+                send_error(res, validation_error);
+                return;
+            }
+        }
+        auto loaded_for_route = manager_->get_loaded_models();
+        std::vector<ModelType> types_for_route;
+        types_for_route.reserve(loaded_for_route.size());
+        for (const auto& loaded_name : loaded_for_route) {
+            types_for_route.push_back(manager_->get_model_type(loaded_name));
+        }
+        const auto route = RequestRouter::choose(route_request, loaded_for_route,
+                                                 types_for_route, manager_->get_current_model());
+        if (!route.accepted) {
+            send_error(res, route.error, "route_rejected", 422);
+            return;
+        }
+        model = route.model;
         bool stream = body.value("stream", false);
         int max_tokens = 0;
         if (!read_bounded_integer(

@@ -14,6 +14,7 @@
 #include "vpid_workspace.h"
 #include "dequant_cache.h"
 #include "vpid_bridge.h"
+#include "model_types.h"
 #include <string>
 #include <memory>
 #include <vector>
@@ -93,6 +94,11 @@ public:
     std::vector<std::string> list_models() const { return get_loaded_models(); }  // MCB alias
     bool is_loaded(const std::string& name) const;
     bool unload_model_bool(const std::string& name);  // Returns bool version for MCB
+    ModelType get_model_type(const std::string& name) const;
+
+    /** Rebalance GPU residency and recover the active model after eviction. */
+    bool rebalance_gpu();
+    bool recover_model(const std::string& name);
 
     // Model info (for MCB integration)
     struct ModelInfo {

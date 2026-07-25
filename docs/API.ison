@@ -3,7 +3,7 @@
 
 api.info
 name SnapLLM
-version 1.15.0
+version 1.16.0
 base_url http://localhost:6930
 description "Local multi-model LLM inference with resident model selection"
 
@@ -27,7 +27,7 @@ path method description
 
 endpoint.health.response
 status ok
-version "1.15.0"
+version "1.16.0"
 timestamp "2026-01-19T12:00:00Z"
 models_loaded 3
 current_model medicine
@@ -57,6 +57,9 @@ messages [
   {role system content "You are a medical assistant."}
   {role user content "What is diabetes?"}
 ]
+# Optional deterministic routing. A requested model must support the modality;
+# otherwise the API returns 422 route_rejected. task matches a loaded model name.
+routing {task "code" modality "text"}
 
 endpoint.chat.response
 id "chatcmpl-abc123def456"

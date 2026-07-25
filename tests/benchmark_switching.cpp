@@ -206,6 +206,36 @@ BenchmarkResult benchmark_switch_under_load(ModelManager& manager,
     return result;
 }
 
+BenchmarkResult benchmark_cold_load(ModelManager& manager, const std::string& model_name,
+                                    const std::string& model_path, int iterations) {
+    BenchmarkResult result;
+    result.test_name = "cold_load_" + model_name;
+    result.iterations = iterations;
+    std::vector<double> times_ms;
+    times_ms.reserve(iterations);
+    for (int i = 0; i < iterations; ++i) {
+        manager.unload_model(model_name);
+        const auto start = high_resolution_clock::now();
+        const bool loaded = manager.load_model(model_name, model_path);
+        const auto end = high_resolution_clock::now();
+        if (!loaded) continue;
+        times_ms.push_back(duration<double, std::milli>(end - start).count());
+    }
+    if (times_ms.empty()) {
+        result.passed = false;
+        return result;
+    }
+    result.min_ms = *std::min_element(times_ms.begin(), times_ms.end());
+    result.max_ms = *std::max_element(times_ms.begin(), times_ms.end());
+    result.mean_ms = calculate_mean(times_ms);
+    result.median_ms = calculate_median(times_ms);
+    result.stddev_ms = calculate_stddev(times_ms, result.mean_ms);
+    result.p95_ms = calculate_percentile(times_ms, 95.0);
+    result.p99_ms = calculate_percentile(times_ms, 99.0);
+    result.passed = true; // Cold load has no sub-millisecond target; report the measurement.
+    return result;
+}
+
 // ============================================================================
 // Report Printing
 // ============================================================================
@@ -352,12 +382,14 @@ int main(int argc, char* argv[]) {
     // Test 1: Basic switch between first two models
     std::cout << "Running: Basic Model Switch Test...\n";
     auto result1 = benchmark_model_switch(manager, model_names[0], model_names[1], iterations);
+    result1.test_name = "resident_switch_" + model_names[0] + "_to_" + model_names[1];
     print_result(result1);
     results.push_back(result1);
 
     // Test 2: Reverse switch
     std::cout << "Running: Reverse Switch Test...\n";
     auto result2 = benchmark_model_switch(manager, model_names[1], model_names[0], iterations);
+    result2.test_name = "warm_cache_switch_" + model_names[1] + "_to_" + model_names[0];
     print_result(result2);
     results.push_back(result2);
 
@@ -374,6 +406,12 @@ int main(int argc, char* argv[]) {
     auto result4 = benchmark_switch_under_load(manager, model_names[0], model_names[1], iterations / 2);
     print_result(result4);
     results.push_back(result4);
+
+    // Cold-load is deliberately separate: it unloads and reloads from the supplied path.
+    std::cout << "Running: Cold Load Test...\n";
+    auto result5 = benchmark_cold_load(manager, model_names[1], model_paths[1], std::max(1, iterations / 10));
+    print_result(result5);
+    results.push_back(result5);
 
     // Print ISON summary
     print_summary_ison(results);

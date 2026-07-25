@@ -10,6 +10,7 @@ set(SNAPLLM_SOURCES
     vpid_hot_cache.cpp
     vpid_bridge.cpp
     model_manager.cpp
+    request_router.cpp
     context_manager.cpp         # vPID L2 - KV Cache persistence
     file_cache_store.cpp        # vPID L2 - File-based cache storage
     kv_cache_extractor.cpp      # vPID L2 - KV extraction from llama.cpp
@@ -245,6 +246,20 @@ if(BUILD_TESTING)
         $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>
     )
     add_test(NAME workspace_metadata_security COMMAND snapllm_workspace_metadata_security_test)
+
+    add_executable(snapllm_request_router_test
+        ${CMAKE_SOURCE_DIR}/tests/request_router_test.cpp
+    )
+    target_link_libraries(snapllm_request_router_test PRIVATE snapllm)
+    target_include_directories(snapllm_request_router_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME request_router COMMAND snapllm_request_router_test)
+
+    add_executable(snapllm_benchmark_throughput
+        ${CMAKE_SOURCE_DIR}/tests/benchmark_throughput.cpp
+    )
+    target_include_directories(snapllm_benchmark_throughput PRIVATE
+        ${CMAKE_SOURCE_DIR}/external/llama.cpp/vendor/cpp-httplib
+    )
 endif()
 
 # =============================================================================
