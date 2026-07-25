@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.10.0] - 2026-07-25
+
+- Prevent 32-bit intermediate overflow in GPT-J context-size calculations.
+
 ## [1.9.0] - 2026-07-24
 
 - Update `serde_with`, `tar`, and `rand` to their patched security releases.

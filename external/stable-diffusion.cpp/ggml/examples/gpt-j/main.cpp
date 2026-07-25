@@ -162,10 +162,12 @@ bool gptj_model_load(const std::string & fname, gptj_model & model, gpt_vocab & 
     {
         const auto & hparams = model.hparams;
 
-        const int n_embd  = hparams.n_embd;
-        const int n_layer = hparams.n_layer;
-        const int n_ctx   = hparams.n_ctx;
-        const int n_vocab = hparams.n_vocab;
+        // Promote model dimensions before multiplying so large models cannot
+        // overflow a 32-bit intermediate before ggml_row_size receives int64_t.
+        const int64_t n_embd  = hparams.n_embd;
+        const int64_t n_layer = hparams.n_layer;
+        const int64_t n_ctx   = hparams.n_ctx;
+        const int64_t n_vocab = hparams.n_vocab;
 
         ctx_size += ggml_row_size(GGML_TYPE_F32, n_embd); // ln_f_g
         ctx_size += ggml_row_size(GGML_TYPE_F32, n_embd); // ln_f_b
