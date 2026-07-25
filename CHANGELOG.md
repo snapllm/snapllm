@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.14.0] - 2026-07-25
+
+- Add a narrowly scoped React Router RSC audit exception and pin `brace-expansion` to 5.0.8.
+
 ## [1.13.0] - 2026-07-25
 
 - Pin the Tauri lockfile to the portable published `plist 1.10.0` release.

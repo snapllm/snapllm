@@ -162,7 +162,7 @@ jobs:
       - name: Install
         run: npm ci
       - name: Dependency audit
-        run: npm audit
+        run: npm run audit
       - name: Unit tests
         run: npm test -- --run
       - name: Lint
