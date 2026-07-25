@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.13.0] - 2026-07-25
+
+- Pin the Tauri lockfile to the portable published `plist 1.10.0` release.
+
 ## [1.12.0] - 2026-07-25
 
 - Fix all SnapLLM-owned instances of the CodeQL integer-multiplication-cast warning.
