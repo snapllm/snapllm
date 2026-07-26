@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.17.2] - 2026-07-25
+
+- Pin the desktop Rust lockfile to the published `bstr 1.13.0` release.
+
 ## [1.17.1] - 2026-07-25
 
 - Repair the npm lockfile for Windows/Linux optional native dependency

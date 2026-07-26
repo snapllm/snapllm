@@ -3,7 +3,7 @@
 
 api.info
 name SnapLLM
-version 1.17.1
+version 1.17.2
 base_url http://localhost:6930
 description "Local multi-model LLM inference with resident model selection"
 
@@ -27,7 +27,7 @@ path method description
 
 endpoint.health.response
 status ok
-version "1.17.1"
+version "1.17.2"
 timestamp "2026-01-19T12:00:00Z"
 models_loaded 3
 current_model medicine
