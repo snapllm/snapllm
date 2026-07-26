@@ -16,6 +16,7 @@ const routes = [
   ['/settings', 'Server Settings'],
   ['/about', 'About'],
   ['/help', 'Help'],
+  ['/docs/api', 'API Reference'],
 ] as const;
 
 test('all public UI routes render without runtime errors', async ({ page }) => {
@@ -28,10 +29,43 @@ test('all public UI routes render without runtime errors', async ({ page }) => {
   for (const [path, visibleText] of routes) {
     await page.goto(path);
     await expect(page.getByText(visibleText, { exact: false }).first()).toBeVisible();
-    await expect(page.locator('body')).not.toContainText('Cannot connect to server');
+    await expect(page.locator('body')).not.toContainText('SnapLLM daemon is offline');
   }
 
   expect(errors, errors.join('\n')).toEqual([]);
+});
+
+test('sidebar and command palette navigation reach their registered routes', async ({ page }) => {
+  await page.goto('/');
+  const links = [
+    ['Dashboard', '/'],
+    ['Chat', '/chat'],
+    ['Images', '/images'],
+    ['Vision', '/vision'],
+    ['Models', '/models'],
+    ['A/B Compare', '/compare'],
+    ['Quick Switch', '/switch'],
+    ['vPID L2 Contexts', '/contexts'],
+    ['API Playground', '/playground'],
+    ['Batch Processing', '/batch'],
+    ['Metrics', '/metrics'],
+    ['API Docs', '/docs/api'],
+    ['Server Settings', '/settings'],
+    ['About', '/about'],
+    ['Help & Docs', '/help'],
+  ] as const;
+
+  for (const [label, path] of links) {
+    await page.getByRole('link', { name: new RegExp(label, 'i') }).first().click();
+    await expect(page).toHaveURL(new RegExp(`${path.replace('/', '\\/')}$`));
+  }
+
+  await page.goto('/');
+  await page.keyboard.press('Control+k');
+  await expect(page.getByPlaceholder(/type a command/i)).toBeVisible();
+  await page.getByPlaceholder(/type a command/i).fill('API Docs');
+  await page.getByRole('button', { name: /go to api docs/i }).click();
+  await expect(page).toHaveURL(/\/docs\/api$/);
 });
 
 test('development proxy reaches the API and Playground executes health', async ({ page }) => {
@@ -170,7 +204,7 @@ test('stalled health check leaves loading and reaches the offline state', async 
   });
   await page.goto('/');
   await expect(page.getByText('Connecting...', { exact: true })).toBeVisible();
-  await expect(page.getByText('Cannot connect to server', { exact: true })).toBeVisible({
+  await expect(page.getByText('SnapLLM daemon is offline', { exact: true })).toBeVisible({
     timeout: 10_000,
   });
 });

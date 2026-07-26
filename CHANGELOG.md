@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.17.5] - 2026-07-25
+
+- Wire Metrics and API Reference into the sidebar and command palette.
+- Move the API Reference UI route to `/docs/api` to avoid the `/api` dev proxy namespace.
+- Add browser coverage for every registered navigation target.
+
 ## [1.17.4] - 2026-07-25
 
 - Fix TypeScript narrowing in the desktop Tauri runtime detection path.

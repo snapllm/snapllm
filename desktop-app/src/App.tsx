@@ -25,6 +25,7 @@ import Metrics from './pages/Metrics';
 import SettingsPage from './pages/Settings';
 import AboutPage from './pages/About';
 import Help from './pages/Help';
+import ApiDocs from './pages/ApiDocs';
 
 // Components
 import ErrorBoundary from './components/ErrorBoundary';
@@ -81,6 +82,7 @@ function App() {
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/about" element={<AboutPage />} />
               <Route path="/help" element={<Help />} />
+              <Route path="/docs/api" element={<ApiDocs />} />
             </Route>
           </Routes>
         </BrowserRouter>

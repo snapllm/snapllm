@@ -20,6 +20,7 @@ import {
   Settings,
   Info,
   HelpCircle,
+  BookOpen,
   Moon,
   Sun,
   Plus,
@@ -71,6 +72,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
     { id: 'nav-settings', title: 'Go to Server Settings', icon: Settings, category: 'Navigation', shortcut: '⌘,', action: () => { navigate('/settings'); onClose(); } },
     { id: 'nav-about', title: 'Go to About', icon: Info, category: 'Navigation', action: () => { navigate('/about'); onClose(); } },
     { id: 'nav-help', title: 'Go to Help & Docs', icon: HelpCircle, category: 'Navigation', action: () => { navigate('/help'); onClose(); } },
+    { id: 'nav-api-docs', title: 'Go to API Docs', icon: BookOpen, category: 'Navigation', action: () => { navigate('/docs/api'); onClose(); } },
 
     // Actions
     { id: 'action-new-chat', title: 'New Conversation', description: 'Start a new chat', icon: Plus, category: 'Actions', shortcut: '⌘N', action: () => { if (activeModelId) createNewConversation(activeModelId); navigate('/chat'); onClose(); } },

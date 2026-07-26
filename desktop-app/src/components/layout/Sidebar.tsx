@@ -18,10 +18,12 @@ import {
   Info,
   Layers,
   HelpCircle,
+  BookOpen,
   ChevronLeft,
   ChevronRight,
   Zap,
   Cpu,
+  BarChart3,
 } from 'lucide-react';
 import { useAppStore, useModelStore, useMetricsStore } from '../../store';
 import { Badge, Tooltip, Avatar } from '../ui';
@@ -67,7 +69,8 @@ const navigationGroups = [
     items: [
       { path: '/playground', icon: Code2, label: 'API Playground', description: 'Interactive API testing' },
       { path: '/batch', icon: Layers, label: 'Batch Processing', description: 'Process multiple prompts' },
-      // Metrics, API Keys removed - no backend implementation
+      { path: '/metrics', icon: BarChart3, label: 'Metrics', description: 'Performance analytics and monitoring' },
+      { path: '/docs/api', icon: BookOpen, label: 'API Docs', description: 'Local API endpoint reference' },
     ],
   },
   // Enterprise section removed - no backend implementation (Team, Audit, Security)

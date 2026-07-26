@@ -18,7 +18,7 @@ echo "========================================"
 echo ""
 
 # Get version from argument or use default
-VERSION="${1:-1.17.4}"
+VERSION="${1:-1.17.5}"
 if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "[ERROR] Version must match MAJOR.MINOR.PATCH."
     exit 1
