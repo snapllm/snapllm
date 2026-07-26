@@ -117,7 +117,7 @@ jobs:
           retention-days: 1
 
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     needs: [validate-release, build-ui]
     steps:
       - name: Enable long paths
