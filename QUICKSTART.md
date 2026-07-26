@@ -153,7 +153,7 @@ build_gpu\bin\snapllm.exe --server --port 6930
 You should see:
 ```
 ================================================================
-  SnapLLM HTTP Server v1.16.0
+  SnapLLM HTTP Server v1.17.0
 ================================================================
   Listening on: http://127.0.0.1:6930
   Workspace:    C:\Users\YourName\SnapLLM_Workspace  (Windows)
@@ -180,7 +180,7 @@ curl http://localhost:6930/health
 
 Response:
 ```json
-{"status": "ok", "version": "1.16.0"}
+{"status": "ok", "version": "1.17.0"}
 ```
 
 ---
@@ -432,7 +432,22 @@ Wait until you see:
 Verify the backend is running:
 ```bash
 curl http://localhost:6930/health
-# Should return: {"status":"ok","version":"1.16.0"...}
+# Should return: {"status":"ok","version":"1.17.0"...}
+
+## Run the local API as a background daemon
+
+SnapLLM can keep the loopback API available after the terminal closes:
+
+```powershell
+snapllm.exe --daemon --port 6930
+snapllm.exe --daemon-status
+snapllm.exe --daemon-stop
+```
+
+The daemon is user-scoped and binds to loopback by default. For login-start
+integration, use `packaging/windows/install-daemon.ps1`,
+`packaging/systemd/snapllm.service`, or
+`packaging/macos/com.snapllm.daemon.plist` for the native platform service.
 ```
 
 ### Step 2: Start the Desktop UI

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.snapllm.daemon</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/local/bin/snapllm</string><string>--server</string>
+    <string>--host</string><string>127.0.0.1</string><string>--port</string><string>6930</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict></plist>

@@ -7,6 +7,7 @@
 #include "snapllm/dequant_cache.h"
 #include "snapllm/model_manager.h"
 #include "snapllm/server.h"
+#include "snapllm/daemon_manager.h"
 #include "snapllm/server_security.h"
 #include "snapllm/version.h"
 #include "snapllm/ison/ison_formatter.hpp"
@@ -231,6 +232,9 @@ void print_usage() {
     std::cout << "  --vram-budget MB          VRAM budget in MB (0=auto-detect, default: 7000)\n";
     std::cout << "\nServer Mode (OpenAI-compatible HTTP API):\n";
     std::cout << "  --server                  Start HTTP server mode\n";
+    std::cout << "  --daemon                  Start the local API as a user-level background process\n";
+    std::cout << "  --daemon-stop             Stop the user-level background process\n";
+    std::cout << "  --daemon-status           Show daemon status\n";
     std::cout << "  --host HOST               Server host (default: 127.0.0.1)\n";
     std::cout << "  --port PORT               Server port (default: 6930)\n";
     std::cout << "  --ui-dir PATH             Web UI files directory (default: auto-detect)\n";
@@ -397,6 +401,10 @@ int main(int argc, char** argv) {
 
     // Server mode options
     bool server_mode = false;
+    bool daemon_mode = false;
+    bool daemon_stop_mode = false;
+    bool daemon_status_mode = false;
+    bool daemon_child = false;
     std::string server_host = "127.0.0.1";
     int server_port = 6930;
     bool cors_enabled = true;
@@ -593,6 +601,20 @@ int main(int argc, char** argv) {
         else if (arg == "--server") {
             server_mode = true;
         }
+        else if (arg == "--daemon") {
+            daemon_mode = true;
+            server_mode = true;
+        }
+        else if (arg == "--daemon-stop") {
+            daemon_stop_mode = true;
+        }
+        else if (arg == "--daemon-status") {
+            daemon_status_mode = true;
+        }
+        else if (arg == "--daemon-child") {
+            daemon_child = true;
+            server_mode = true;
+        }
         else if (arg == "--host" && i + 1 < argc) {
             server_host = argv[++i];
         }
@@ -672,6 +694,30 @@ int main(int argc, char** argv) {
 #endif
     }
 
+    if (daemon_status_mode) {
+        std::string status;
+        daemon_status(status);
+        std::cout << "SnapLLM daemon: " << status << "\n";
+        return 0;
+    }
+    if (daemon_stop_mode) {
+        std::string error;
+        if (!daemon_stop(error)) { std::cerr << error << "\n"; return 1; }
+        std::cout << "SnapLLM daemon stop requested\n";
+        return 0;
+    }
+    if (daemon_mode && !daemon_child) {
+        std::vector<std::string> child_args{"--server", "--daemon-child"};
+        for (int i = 1; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg != "--daemon") child_args.push_back(arg);
+        }
+        std::string error;
+        if (!daemon_start(argv[0], child_args, error)) { std::cerr << error << "\n"; return 1; }
+        std::cout << "SnapLLM daemon started (pid file: " << daemon_pid_path() << ")\n";
+        return 0;
+    }
+
 #ifdef SNAPLLM_HAS_DIFFUSION
     if (!video_models_to_load.empty() || !video_prompt.empty()) {
         std::cerr << "Video generation is not supported in this build. Use image diffusion instead." << std::endl;
@@ -729,6 +775,8 @@ int main(int argc, char** argv) {
     // Server Mode - Start HTTP server and block
     // =========================================================================
     if (server_mode) {
+        std::unique_ptr<DaemonChildGuard> daemon_guard;
+        if (daemon_child) daemon_guard = std::make_unique<DaemonChildGuard>();
         // Auto-detect Web UI directory if not explicitly set
         if (ui_dir.empty()) {
             // Check relative to executable: ../ui/ (release package layout: bin/snapllm + ui/)

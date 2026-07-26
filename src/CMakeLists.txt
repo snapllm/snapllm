@@ -11,6 +11,7 @@ set(SNAPLLM_SOURCES
     vpid_bridge.cpp
     model_manager.cpp
     request_router.cpp
+    daemon_manager.cpp
     context_manager.cpp         # vPID L2 - KV Cache persistence
     file_cache_store.cpp        # vPID L2 - File-based cache storage
     kv_cache_extractor.cpp      # vPID L2 - KV extraction from llama.cpp

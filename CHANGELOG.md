@@ -7,6 +7,11 @@
 - Add opt-in end-to-end concurrent HTTP throughput benchmark.
 - Add regression coverage for routing and cleanup-safe bounded concurrency.
 
+## [1.17.0] - 2026-07-25
+
+- Add cross-platform user-level daemon start, stop, and status commands.
+- Add Windows Scheduled Task, Linux systemd-user, and macOS launchd templates.
+
 ## [1.15.0] - 2026-07-25
 
 - Improve inference burst handling with bounded HTTP backpressure and request-budget queue waits.

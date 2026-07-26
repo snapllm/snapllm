@@ -1,0 +1,13 @@
+[Unit]
+Description=SnapLLM local inference API
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/snapllm --server --host 127.0.0.1 --port 6930
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
