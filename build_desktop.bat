@@ -153,7 +153,7 @@ exit /b 1
 :header
  echo.
  echo ============================================================
- echo   SnapLLM Desktop App Builder v1.17.6
+ echo   SnapLLM Desktop App Builder v1.17.7
  echo ============================================================
  echo.
  exit /b 0
@@ -167,10 +167,10 @@ exit /b 1
  echo Output locations:
  echo.
  echo   NSIS Installer (recommended):
- echo     src-tauri\target\release\bundle\nsis\SnapLLM_1.17.6_x64-setup.exe
+ echo     src-tauri\target\release\bundle\nsis\SnapLLM_1.17.7_x64-setup.exe
  echo.
  echo   MSI Installer:
- echo     src-tauri\target\release\bundle\msi\SnapLLM_1.17.6_x64_en-US.msi
+ echo     src-tauri\target\release\bundle\msi\SnapLLM_1.17.7_x64_en-US.msi
  echo.
  echo   Portable Executable:
  echo     src-tauri\target\release\SnapLLM.exe

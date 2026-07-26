@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.17.7] - 2026-07-25
+
+- Synchronize the desktop Cargo lockfile root package version with the release.
+
 ## [1.17.6] - 2026-07-25
 
 - Add an accessible name to the sidebar collapse control.
