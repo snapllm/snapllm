@@ -68,6 +68,15 @@ test('sidebar and command palette navigation reach their registered routes', asy
   await expect(page).toHaveURL(/\/docs\/api$/);
 });
 
+test('icon-only controls expose accessible names', async ({ page }) => {
+  await page.goto('/');
+  const unnamed = await page.locator('button').evaluateAll((buttons) => buttons.filter((button) => {
+    const label = button.getAttribute('aria-label') || button.getAttribute('title') || button.textContent?.trim();
+    return !label;
+  }).length);
+  expect(unnamed).toBe(0);
+});
+
 test('development proxy reaches the API and Playground executes health', async ({ page }) => {
   const response = await page.request.get('/health');
   expect(response.ok()).toBeTruthy();

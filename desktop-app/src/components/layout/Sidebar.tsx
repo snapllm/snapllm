@@ -137,6 +137,7 @@ export const Sidebar: React.FC = () => {
 
         <button
           onClick={toggleSidebar}
+          aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           className={clsx(
             "p-1.5 rounded-lg hover:bg-surface-100 dark:hover:bg-surface-800 text-surface-500",
             sidebarCollapsed && "mt-1"

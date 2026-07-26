@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.17.6] - 2026-07-25
+
+- Add an accessible name to the sidebar collapse control.
+- Add a browser regression check for unnamed icon-only buttons.
+
 ## [1.17.5] - 2026-07-25
 
 - Wire Metrics and API Reference into the sidebar and command palette.
