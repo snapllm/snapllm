@@ -85,7 +85,17 @@ jobs:
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.0-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup2.4-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          for pc in javascriptcoregtk webkit2gtk webkit2gtk-web-extension; do
+            if [ -f "/usr/lib/x86_64-linux-gnu/pkgconfig/${pc}-4.1.pc" ]; then
+              sudo ln -sf "${pc}-4.1.pc" "/usr/lib/x86_64-linux-gnu/pkgconfig/${pc}-4.0.pc"
+            fi
+          done
+          for lib in javascriptcoregtk webkit2gtk; do
+            if [ -e "/usr/lib/x86_64-linux-gnu/lib${lib}-4.1.so" ]; then
+              sudo ln -sf "lib${lib}-4.1.so" "/usr/lib/x86_64-linux-gnu/lib${lib}-4.0.so"
+            fi
+          done
       - name: Rust formatting
         run: cargo fmt --manifest-path desktop-app/src-tauri/Cargo.toml --check
       - name: Rust check and tests
