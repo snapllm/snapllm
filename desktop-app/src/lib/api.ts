@@ -740,7 +740,7 @@ export const handleApiError = (error: unknown): string => {
 // Check if running in Tauri environment
 export const isTauriAvailable = (): boolean => {
   return typeof window !== 'undefined'
-    && ('__TAURI__' in window || window.location.protocol === 'tauri:' || window.location.protocol === 'asset:');
+    && ('__TAURI__' in window || globalThis.location?.protocol === 'tauri:' || globalThis.location?.protocol === 'asset:');
 };
 
 export const selectModelFile = async (): Promise<string | null> => {

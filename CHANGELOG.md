@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.17.4] - 2026-07-25
+
+- Fix TypeScript narrowing in the desktop Tauri runtime detection path.
+
 ## [1.17.3] - 2026-07-25
 
 - Wire SnapLLM Desktop to start, stop, and inspect the native local daemon.
