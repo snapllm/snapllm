@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.17.8] - 2026-07-25
+
+- Fix the Tauri resource-directory API call so the desktop Rust check compiles.
+
 ## [1.17.7] - 2026-07-25
 
 - Synchronize the desktop Cargo lockfile root package version with the release.
