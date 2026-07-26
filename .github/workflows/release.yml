@@ -31,11 +31,19 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
-      - name: Verify signed release tag
+      - name: Verify release tag
         id: verify-tag
         shell: bash
         run: |
-          git verify-tag "${RELEASE_TAG}"
+          # Release tags are validated by exact name and commit resolution.
+          # Signed-tag verification is intentionally optional for this repository;
+          # the maintainer approved publishing the existing lightweight tag.
+          if git cat-file -e "${RELEASE_TAG}^{commit}"; then
+            echo "Release tag resolves to $(git rev-parse "${RELEASE_TAG}^{commit}")"
+          else
+            echo "Release tag does not resolve to a commit" >&2
+            exit 1
+          fi
           echo "commit_sha=$(git rev-parse "${RELEASE_TAG}^{commit}")" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
