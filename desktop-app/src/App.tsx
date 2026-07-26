@@ -28,6 +28,7 @@ import Help from './pages/Help';
 
 // Components
 import ErrorBoundary from './components/ErrorBoundary';
+import { ensureDaemonRunning } from './lib/daemon';
 
 // ============================================================================
 // Query Client Configuration
@@ -48,6 +49,8 @@ const queryClient = new QueryClient({
 // ============================================================================
 
 function App() {
+  React.useEffect(() => { void ensureDaemonRunning(); }, []);
+
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>

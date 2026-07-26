@@ -584,12 +584,12 @@ export default function Dashboard() {
               <div className="flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
                 <div className="flex-1">
-                  <h4 className="font-medium text-red-800 dark:text-red-200">Cannot connect to server</h4>
+                  <h4 className="font-medium text-red-800 dark:text-red-200">SnapLLM daemon is offline</h4>
                   <p className="text-sm text-red-600 dark:text-red-300 mt-1">
-                    Make sure the API server is running on {apiBaseUrl}
+                    The local API is unavailable at {apiBaseUrl}. SnapLLM Desktop starts the daemon automatically when its CLI is installed.
                   </p>
                   <code className="block mt-2 text-xs bg-red-100 dark:bg-red-900/50 p-2 rounded-lg text-red-700 dark:text-red-300">
-                    snapllm --server --host 127.0.0.1 --port 6930 --cors-origin http://127.0.0.1:9780 --cors-origin http://localhost:9780
+                    snapllm --daemon --host 127.0.0.1 --port 6930
                   </code>
                 </div>
                 <button

@@ -1686,7 +1686,7 @@ export default function Models() {
                       <div>
                         <p className="text-sm font-medium text-warning-800 dark:text-warning-200">{scanError}</p>
                         <p className="text-xs text-warning-600 dark:text-warning-400 mt-1">
-                          Start server: <code className="px-1 bg-warning-100 dark:bg-warning-800 rounded">snapllm.exe --server --port 6930</code>
+                          Start the local daemon: <code className="px-1 bg-warning-100 dark:bg-warning-800 rounded">snapllm.exe --daemon --port 6930</code>
                         </p>
                       </div>
                     </div>

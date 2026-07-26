@@ -27,7 +27,9 @@ import {
   handleApiError,
   setRuntimeApiKey,
   updateConfig,
+  isTauriAvailable,
 } from '../lib/api';
+import { daemonCommand } from '../lib/daemon';
 import { Alert, Badge, Button, Card, Input, Select, Toggle } from '../components/ui';
 
 const STRATEGY_OPTIONS = [
@@ -172,9 +174,38 @@ export default function SettingsPage() {
   const [apiKey, setApiKey] = React.useState('');
   const [apiKeyStatus, setApiKeyStatus] = React.useState<string | null>(null);
   const [apiKeyError, setApiKeyError] = React.useState<string | null>(null);
+  const [daemonState, setDaemonState] = React.useState<string>('unknown');
+  const [daemonError, setDaemonError] = React.useState<string | null>(null);
+  const [daemonBusy, setDaemonBusy] = React.useState(false);
 
   const isConnected = config?.status === 'success';
   const features = config?.features || {};
+
+  const refreshDaemonState = React.useCallback(async () => {
+    if (!isTauriAvailable()) return;
+    try {
+      setDaemonState(await daemonCommand('status'));
+      setDaemonError(null);
+    } catch (error) {
+      setDaemonState('unavailable');
+      setDaemonError(String(error));
+    }
+  }, []);
+
+  React.useEffect(() => { void refreshDaemonState(); }, [refreshDaemonState]);
+
+  const changeDaemonState = async (action: 'start' | 'stop') => {
+    setDaemonBusy(true);
+    setDaemonError(null);
+    try {
+      await daemonCommand(action);
+      await refreshDaemonState();
+    } catch (error) {
+      setDaemonError(String(error));
+    } finally {
+      setDaemonBusy(false);
+    }
+  };
 
   const updateMutation = useMutation({
     mutationFn: (payload: ConfigUpdateRequest) => updateConfig(payload),
@@ -361,6 +392,22 @@ export default function SettingsPage() {
           Start the SnapLLM server to apply settings changes. You can still edit values, but saving
           requires an active server instance.
         </Alert>
+      )}
+
+      {isTauriAvailable() && (
+        <Card className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-surface-900 dark:text-white">Local daemon</h2>
+            <p className="text-sm text-surface-500">Desktop controls for the SnapLLM API process on port 6930.</p>
+            <p className="mt-1 text-xs font-mono text-surface-500" role="status">{daemonState}</p>
+            {daemonError && <p className="mt-1 text-sm text-error-600 dark:text-error-400">{daemonError}</p>}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="primary" size="sm" onClick={() => void changeDaemonState('start')} isLoading={daemonBusy}>Start</Button>
+            <Button variant="secondary" size="sm" onClick={() => void changeDaemonState('stop')} disabled={daemonBusy}>Stop</Button>
+            <Button variant="secondary" size="sm" onClick={() => void refreshDaemonState()} disabled={daemonBusy}>Refresh</Button>
+          </div>
+        </Card>
       )}
 
       {saveError && (

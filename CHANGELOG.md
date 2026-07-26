@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.17.3] - 2026-07-25
+
+- Wire SnapLLM Desktop to start, stop, and inspect the native local daemon.
+- Start the daemon automatically in the packaged desktop app when the CLI is available.
+- Replace stale server/FastAPI launch guidance with the daemon command.
+
 ## [1.17.2] - 2026-07-25
 
 - Pin the desktop Rust lockfile to the published `bstr 1.13.0` release.

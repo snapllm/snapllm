@@ -874,7 +874,7 @@ export default function Playground() {
               </p>
               <div className="flex items-center gap-4 mt-2">
                 <button
-                  onClick={() => copyToClipboard('snapllm.exe --server --port 6930')}
+                  onClick={() => copyToClipboard('snapllm.exe --daemon --port 6930')}
                   className="text-xs text-amber-700 dark:text-amber-200 hover:underline flex items-center gap-1"
                 >
                   <Terminal className="w-3 h-3" />

@@ -1,7 +1,7 @@
 /**
  * React Query Hooks for SnapLLM API
  *
- * Custom hooks for fetching and mutating data from the FastAPI server
+ * Custom hooks for fetching and mutating data from the SnapLLM local API
  * Uses TanStack React Query for caching, refetching, and state management
  */
 

@@ -1,6 +1,6 @@
 /**
- * SnapLLM FastAPI Client
- * TypeScript client for connecting to the SnapLLM FastAPI server
+ * SnapLLM local API client
+ * TypeScript client for the SnapLLM daemon and HTTP API
  */
 
 import axios, { AxiosError } from 'axios';
@@ -164,7 +164,7 @@ api.interceptors.request.use((config) => {
 });
 
 // ============================================================================
-// Types matching FastAPI schemas
+// Types matching the SnapLLM local API schemas
 // ============================================================================
 
 export interface HealthResponse {
@@ -720,7 +720,7 @@ export const handleApiError = (error: unknown): string => {
     }
 
     if (axiosError.code === 'ECONNREFUSED') {
-      return 'Cannot connect to SnapLLM server. Start with: snapllm --server --port 6930';
+      return 'Cannot connect to the SnapLLM daemon. Open SnapLLM Desktop or start `snapllm --daemon --port 6930`.';
     }
 
     if (axiosError.code === 'ETIMEDOUT') {
@@ -739,7 +739,8 @@ export const handleApiError = (error: unknown): string => {
 
 // Check if running in Tauri environment
 export const isTauriAvailable = (): boolean => {
-  return typeof window !== 'undefined' && '__TAURI__' in window;
+  return typeof window !== 'undefined'
+    && ('__TAURI__' in window || window.location.protocol === 'tauri:' || window.location.protocol === 'asset:');
 };
 
 export const selectModelFile = async (): Promise<string | null> => {
