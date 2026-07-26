@@ -79,7 +79,7 @@ jobs:
       - name: Lint
         run: npm --prefix desktop-app run lint
       - name: Type check
-        run: npm --prefix desktop-app exec tsc -- --noEmit
+        run: npm --prefix desktop-app exec -- tsc --noEmit
       - name: Build Web UI
         run: npm --prefix desktop-app run build
       - name: Install Tauri system dependencies
