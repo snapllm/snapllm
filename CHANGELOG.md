@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.17.1] - 2026-07-25
+
+- Repair the npm lockfile for Windows/Linux optional native dependency
+  resolution so `npm ci` is reproducible in Actions.
+
 ## [1.16.0] - 2026-07-25
 
 - Add deterministic production request routing with wrong-modality rejection.
