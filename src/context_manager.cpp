@@ -682,8 +682,7 @@ size_t ContextManager::query_streaming(
     // Perform streaming generation with the injected KV cache
     // Wrap our void callback to match VPIDBridge's bool callback signature
     auto bridge_callback = [&callback](const std::string& token, int token_id, bool is_eos) -> bool {
-        callback(token, token_id, is_eos);
-        return true;  // Always continue (the bridge handles EOS internally)
+        return callback(token, token_id, is_eos);
     };
 
     size_t tokens_generated = bridge->generate_streaming_with_injected_kv(

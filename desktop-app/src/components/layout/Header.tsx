@@ -3,7 +3,7 @@
 // ============================================================================
 
 import React, { useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
 import {
@@ -18,6 +18,11 @@ import {
   Cpu,
   HardDrive,
   Activity,
+  CheckCircle2,
+  AlertTriangle,
+  AlertCircle,
+  Info,
+  X,
 } from 'lucide-react';
 import { useAppStore, useModelStore, useMetricsStore } from '../../store';
 import { IconButton, Badge } from '../ui';
@@ -29,11 +34,14 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   '/chat': { title: 'Chat', description: 'Text generation with LLMs' },
   '/images': { title: 'Image Studio', description: 'Generate images with Stable Diffusion' },
   '/vision': { title: 'Vision', description: 'Multimodal image understanding' },
+  '/contexts': { title: 'Contexts', description: 'Manage reusable KV cache contexts' },
   '/models': { title: 'Model Hub', description: 'Load and manage AI models' },
   '/compare': { title: 'A/B Compare', description: 'Compare model outputs side by side' },
   '/switch': { title: 'Quick Switch', description: 'Ultra-fast model switching' },
   '/playground': { title: 'API Playground', description: 'Interactive API testing' },
+  '/batch': { title: 'Batch Processing', description: 'Process multiple prompts' },
   '/metrics': { title: 'Metrics', description: 'Performance analytics and monitoring' },
+  '/docs/api': { title: 'API Docs', description: 'Local API endpoint reference' },
   '/settings': { title: 'Server Settings', description: 'Runtime defaults and feature flags' },
   '/about': { title: 'About', description: 'Legacy server snapshot and build highlights' },
   '/help': { title: 'Help & Docs', description: 'Documentation and support' },
@@ -41,7 +49,8 @@ const pageTitles: Record<string, { title: string; description: string }> = {
 
 export const Header: React.FC = () => {
   const location = useLocation();
-  const { theme, setTheme, setCommandPaletteOpen, notifications } = useAppStore();
+  const navigate = useNavigate();
+  const { theme, setTheme, setCommandPaletteOpen, notifications, markNotificationRead, clearNotifications } = useAppStore();
   const { models, activeModelId, setActiveModel } = useModelStore();
   const { systemMetrics, isConnected } = useMetricsStore();
 
@@ -225,7 +234,80 @@ export const Header: React.FC = () => {
             label="Notifications"
             onClick={() => setShowNotifications(!showNotifications)}
           />
-          {/* Notification dropdown would go here */}
+          <AnimatePresence>
+            {showNotifications && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
+                <motion.div
+                  role="dialog"
+                  aria-label="Notifications"
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] card p-2 z-50"
+                >
+                  <div className="flex items-center justify-between px-2 py-1">
+                    <h2 className="text-sm font-semibold text-surface-900 dark:text-surface-100">Notifications</h2>
+                    {notifications.length > 0 && (
+                      <button
+                        type="button"
+                        className="text-xs text-brand-600 hover:underline"
+                        onClick={clearNotifications}
+                      >
+                        Clear all
+                      </button>
+                    )}
+                  </div>
+                  {notifications.length === 0 ? (
+                    <p className="px-2 py-6 text-center text-sm text-surface-500">No notifications</p>
+                  ) : (
+                    <ul className="mt-1 max-h-80 overflow-y-auto space-y-1" aria-live="polite">
+                      {notifications.map((notification) => {
+                        const Icon = notification.type === 'success'
+                          ? CheckCircle2
+                          : notification.type === 'warning'
+                            ? AlertTriangle
+                            : notification.type === 'error' ? AlertCircle : Info;
+                        return (
+                          <li key={notification.id}>
+                            <button
+                              type="button"
+                              className={clsx(
+                                'w-full text-left rounded-lg p-2 flex gap-2 hover:bg-surface-100 dark:hover:bg-surface-800',
+                                !notification.read && 'bg-brand-50/60 dark:bg-brand-900/10'
+                              )}
+                              onClick={() => {
+                                markNotificationRead(notification.id);
+                                if (notification.actionUrl) {
+                                  navigate(notification.actionUrl);
+                                  setShowNotifications(false);
+                                }
+                              }}
+                            >
+                              <Icon className="w-4 h-4 mt-0.5 text-surface-500 shrink-0" aria-hidden="true" />
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-xs font-medium text-surface-900 dark:text-surface-100">{notification.title}</span>
+                                <span className="block text-xs text-surface-500 break-words">{notification.message}</span>
+                              </span>
+                              {!notification.read && <span className="w-2 h-2 mt-1 rounded-full bg-brand-500 shrink-0" aria-label="Unread" />}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  <button
+                    type="button"
+                    aria-label="Close notifications"
+                    className="absolute top-2 right-2 p-1 text-surface-400 hover:text-surface-700"
+                    onClick={() => setShowNotifications(false)}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 

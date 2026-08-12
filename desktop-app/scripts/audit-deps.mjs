@@ -1,28 +1,35 @@
 import { execFileSync } from 'node:child_process';
 
-// Temporary, narrowly scoped exception approved by the maintainer:
-// GHSA-qwww-vcr4-c8h2 only affects React Router's unstable RSC APIs, which
-// SnapLLM does not enable. Remove this exception when react-router >=8.3.0
-// is published and available in the lockfile.
-const approved = new Set(['GHSA-qwww-vcr4-c8h2']);
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const npm = process.env.npm_execpath
+  ? process.execPath
+  : (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+const npmArgs = process.env.npm_execpath
+  ? [process.env.npm_execpath, 'audit', '--json']
+  : ['audit', '--json'];
 let output;
 try {
-  output = execFileSync(npm, ['audit', '--json'], {
+  output = execFileSync(npm, npmArgs, {
     encoding: 'utf8',
-    shell: process.platform === 'win32',
+    ...(process.platform === 'win32' && !process.env.npm_execpath ? { shell: true } : {}),
   });
 } catch (error) {
-  output = error.stdout;
+  output = error.stdout ?? '';
+}
+if (!output) {
+  console.error('npm audit did not return JSON output');
+  process.exit(1);
 }
 const report = JSON.parse(output);
 const findings = [];
 
 for (const [name, vulnerability] of Object.entries(report.vulnerabilities ?? {})) {
-  for (const advisory of vulnerability.via ?? []) {
-    if (typeof advisory === 'object' && !approved.has(advisory.url?.split('/').pop())) {
-      findings.push(`${name}: ${advisory.title ?? advisory.url ?? 'unknown advisory'}`);
-    }
+  const advisories = (vulnerability.via ?? []).map((advisory) =>
+    typeof advisory === 'object'
+      ? (advisory.title ?? advisory.url ?? 'unknown advisory')
+      : String(advisory),
+  );
+  if (advisories.length > 0) {
+    findings.push(`${name}: ${advisories.join('; ')}`);
   }
 }
 
@@ -31,4 +38,4 @@ if (findings.length) {
   process.exit(1);
 }
 
-console.log('npm audit: passed (approved RSC-only exception: GHSA-qwww-vcr4-c8h2)');
+console.log('npm audit: passed (no advisories)');

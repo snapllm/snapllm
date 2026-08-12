@@ -5,8 +5,8 @@
 # ============================================================================
 # This script creates a distributable release package with all necessary files.
 #
-# Usage: ./package_release.sh [version]
-# Example: ./package_release.sh 1.3.1
+# Usage: ./package_release.sh [version] [cpu|gpu]
+# Example: ./package_release.sh 1.17.8 cpu
 # ============================================================================
 
 set -e
@@ -19,17 +19,23 @@ echo ""
 
 # Get version from argument or use default
 VERSION="${1:-1.17.8}"
+MODE="${2:-cpu}"
+if [[ "${MODE}" == "cuda" ]]; then MODE="gpu"; fi
 if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "[ERROR] Version must match MAJOR.MINOR.PATCH."
     exit 1
 fi
-RELEASE_NAME="snapllm-${VERSION}-linux-x64-cuda"
+if [[ "${MODE}" != "cpu" && "${MODE}" != "gpu" ]]; then
+    echo "[ERROR] Mode must be cpu or gpu."
+    exit 1
+fi
+RELEASE_NAME="snapllm-${VERSION}-linux-x64-${MODE}"
 RELEASES_DIR="$(pwd -P)/releases"
 RELEASE_DIR="${RELEASES_DIR}/${RELEASE_NAME}"
-BUILD_DIR="build_gpu"
+BUILD_DIR="build_${MODE}"
 
 case "${RELEASE_DIR}" in
-    "${RELEASES_DIR}"/snapllm-*-linux-x64-cuda) ;;
+    "${RELEASES_DIR}"/snapllm-*-linux-x64-*) ;;
     *)
         echo "[ERROR] Refusing release path outside ${RELEASES_DIR}."
         exit 1
@@ -38,7 +44,7 @@ esac
 
 # Check if build exists
 if [ ! -f "${BUILD_DIR}/bin/snapllm" ]; then
-    echo "[ERROR] Build not found! Run ./build.sh --cuda first."
+    echo "[ERROR] Build not found! Run ./build.sh gpu first."
     exit 1
 fi
 
@@ -52,6 +58,12 @@ mkdir -p "${RELEASE_DIR}/bin"
 mkdir -p "${RELEASE_DIR}/examples"
 mkdir -p "${RELEASE_DIR}/docs"
 mkdir -p "${RELEASE_DIR}/lib"
+mkdir -p "${RELEASE_DIR}/ui"
+
+if [ ! -f "desktop-app/dist/index.html" ]; then
+    echo "[ERROR] Web UI build not found. Run npm --prefix desktop-app run build first."
+    exit 1
+fi
 
 # Copy main executable
 echo "[2/6] Copying executable..."
@@ -68,6 +80,8 @@ cp README.md "${RELEASE_DIR}/" 2>/dev/null || true
 cp LICENSE "${RELEASE_DIR}/" 2>/dev/null || true
 cp QUICKSTART.md "${RELEASE_DIR}/" 2>/dev/null || true
 cp docs/*.md "${RELEASE_DIR}/docs/" 2>/dev/null || true
+echo "[INFO] Copying web UI..."
+cp -r desktop-app/dist/* "${RELEASE_DIR}/ui/"
 
 # Copy examples
 echo "[5/6] Copying examples..."
@@ -83,7 +97,7 @@ cat > "${RELEASE_DIR}/run_server.sh" << 'EOF'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${LD_LIBRARY_PATH}"
 echo "Starting SnapLLM Server..."
-exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 "$@"
+exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --ui-dir "${SCRIPT_DIR}/ui" "$@"
 EOF
 chmod +x "${RELEASE_DIR}/run_server.sh"
 
@@ -101,7 +115,7 @@ read -p "Enter path to your .gguf model file: " MODEL_PATH
 read -p "Enter a name for this model: " MODEL_NAME
 echo ""
 echo "Starting server with model: ${MODEL_NAME}"
-exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --load-model "${MODEL_NAME}" "${MODEL_PATH}"
+exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --ui-dir "${SCRIPT_DIR}/ui" --load-model "${MODEL_NAME}" "${MODEL_PATH}"
 EOF
 chmod +x "${RELEASE_DIR}/run_server_with_model.sh"
 

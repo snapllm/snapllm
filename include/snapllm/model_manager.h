@@ -69,6 +69,11 @@ public:
     // Inference
     std::string generate(const std::string& prompt, size_t max_tokens = 100, size_t* actual_tokens = nullptr,
                         float temperature = 0.8f, float top_p = 0.95f, int top_k = 40, float repeat_penalty = 1.1f);
+    /** Generate using an explicit model without mutating global selection state. */
+    std::string generate_for_model(const std::string& model_name, const std::string& prompt,
+                                   size_t max_tokens = 100, size_t* actual_tokens = nullptr,
+                                   float temperature = 0.8f, float top_p = 0.95f,
+                                   int top_k = 40, float repeat_penalty = 1.1f);
     std::vector<std::string> generate_batch(const std::vector<std::string>& prompts, size_t max_tokens = 100);
 
     // Parallel batch processing with per-prompt chat messages and sampling parameters
@@ -77,11 +82,22 @@ public:
         float default_temp = 0.8f, float default_top_p = 0.95f,
         int default_top_k = 40, float default_repeat_penalty = 1.1f
     );
+    /** Generate a batch for an explicit model without changing global selection. */
+    std::vector<BatchResult> generate_batch_for_model(
+        const std::string& model_name, const std::vector<BatchPromptItem>& items,
+        float default_temp = 0.8f, float default_top_p = 0.95f,
+        int default_top_k = 40, float default_repeat_penalty = 1.1f
+    );
 
     // Streaming inference - true token-by-token streaming with callback
     size_t generate_streaming(const std::string& prompt, TokenCallback callback,
                               size_t max_tokens = 100, float temperature = 0.8f,
                               float top_p = 0.95f, int top_k = 40, float repeat_penalty = 1.1f);
+    /** Stream using an explicit model without mutating global selection state. */
+    size_t generate_streaming_for_model(const std::string& model_name, const std::string& prompt,
+                                        TokenCallback callback, size_t max_tokens = 100,
+                                        float temperature = 0.8f, float top_p = 0.95f,
+                                        int top_k = 40, float repeat_penalty = 1.1f);
 
     // Reserved compatibility surface; throws because cache-only inference is
     // not implemented.

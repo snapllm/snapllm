@@ -3,13 +3,13 @@
 // Properly renders LLM responses with code blocks, lists, and formatting
 // ============================================================================
 
-import React, { memo } from 'react';
+import React, { lazy, memo, Suspense } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkGfm from 'remark-gfm';
 import { clsx } from 'clsx';
 import { Copy, Check } from 'lucide-react';
+
+const SyntaxCodeBlock = lazy(() => import('./SyntaxCodeBlock'));
 
 interface MarkdownRendererProps {
   content: string;
@@ -53,20 +53,9 @@ const CodeBlock: React.FC<{
           )}
         </button>
       </div>
-      <SyntaxHighlighter
-        language={language || 'text'}
-        style={isDark ? oneDark : oneLight}
-        customStyle={{
-          margin: 0,
-          padding: '1rem',
-          fontSize: '0.875rem',
-          lineHeight: '1.5',
-          borderRadius: 0,
-        }}
-        showLineNumbers={value.split('\n').length > 3}
-      >
-        {value}
-      </SyntaxHighlighter>
+      <Suspense fallback={<pre className="m-0 p-4 overflow-x-auto text-sm"><code>{value}</code></pre>}>
+        <SyntaxCodeBlock language={language} value={value} dark={isDark} />
+      </Suspense>
     </div>
   );
 };

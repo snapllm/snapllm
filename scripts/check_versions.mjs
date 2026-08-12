@@ -19,7 +19,9 @@ const versions = {
   'desktop-app/package.json': packageJson.version,
   'desktop-app/package-lock.json': packageLock.version,
   'desktop-app/package-lock.json root package': packageLock.packages?.['']?.version,
-  'desktop-app/src-tauri/tauri.conf.json': tauriConfig.package.version,
+  // Tauri 2 moved `version` to the config root; retain the nested fallback
+  // so this checker remains useful for older checked-out configurations.
+  'desktop-app/src-tauri/tauri.conf.json': tauriConfig.version ?? tauriConfig.package?.version,
   'desktop-app/src-tauri/Cargo.toml': cargoVersion,
   'src/snapllm.rc': resourceVersion,
 };

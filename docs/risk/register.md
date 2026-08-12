@@ -7,7 +7,7 @@
 
 | ID | Domain | Risk | Likelihood | Impact | Mitigation | Owner | Review by |
 |---|---|---|---|---|---|---|---|
-| R-005 | supply chain | Tauri 1 transitively retains 15 RustSec maintenance/unsoundness warnings despite no actionable vulnerability | medium | medium | Keep the documented allowlist narrow; plan a governed Tauri major migration | DevOps Engineer | next minor |
+| R-005 | supply chain | Tauri 2 transitively retains upstream GTK/WebKitGTK maintenance/unsoundness advisories on Linux | medium | medium | Keep capabilities narrow; track upstream WebKitGTK/Tauri backend updates and re-audit each release | DevOps Engineer | ongoing |
 | R-007 | operational | Unrelated user-owned dirty files could be mixed into the remediation commit | medium | medium | Exact staging; exclude `video/`, `nul`, and `run1.json` | Engineering Lead | commit |
 
 ## Accepted risks

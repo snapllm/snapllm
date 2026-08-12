@@ -135,25 +135,25 @@ export default function Metrics() {
   const { data: status } = useQuery({
     queryKey: ['server-status'],
     queryFn: getServerStatus,
-    refetchInterval: 5000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
   });
 
   const { data: modelsResponse } = useQuery({
     queryKey: ['models'],
     queryFn: listModels,
-    refetchInterval: 10000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 10000,
   });
 
   const { data: metricsData } = useQuery({
     queryKey: ['server-metrics'],
     queryFn: getMetrics,
-    refetchInterval: 5000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
   });
 
   const { data: cacheStats } = useQuery({
     queryKey: ['cache-stats'],
     queryFn: getCacheStats,
-    refetchInterval: 5000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
   });
 
   const models = modelsResponse?.models || [];
@@ -234,6 +234,10 @@ export default function Metrics() {
     : 0;
   const totalThroughput = models?.reduce((acc, m) => acc + (m.throughput_toks || 0), 0) || 0;
   const totalMemory = models?.reduce((acc, m) => acc + (m.ram_usage_mb || 0), 0) || 0;
+  const scheduler = metricsData?.scheduler || {};
+  const activeInferences = Number(scheduler.active_inferences || 0);
+  const waitingInferences = Number(scheduler.waiting_inferences || 0);
+  const maxActiveInferences = Number(scheduler.max_active_inferences || 0);
 
   const metrics: MetricCard[] = [
     {
@@ -349,6 +353,24 @@ export default function Metrics() {
           </motion.div>
         ))}
       </div>
+
+      {/* Admission/scheduler observability */}
+      <Card className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="font-semibold text-surface-900 dark:text-white">Inference Scheduler</h3>
+            <p className="text-sm text-surface-500">Bounded admission and backpressure</p>
+          </div>
+          <Badge variant={waitingInferences > 0 ? 'warning' : 'success'}>
+            {waitingInferences > 0 ? `${waitingInferences} waiting` : 'No backlog'}
+          </Badge>
+        </div>
+        <div className="grid grid-cols-3 gap-4 text-sm">
+          <div><p className="text-surface-500">Active</p><p className="text-lg font-semibold text-surface-900 dark:text-white">{activeInferences}/{maxActiveInferences || '-'}</p></div>
+          <div><p className="text-surface-500">Waiting</p><p className="text-lg font-semibold text-surface-900 dark:text-white">{waitingInferences}</p></div>
+          <div><p className="text-surface-500">Admission</p><p className="text-lg font-semibold text-surface-900 dark:text-white">{scheduler.admission || 'bounded'}</p></div>
+        </div>
+      </Card>
 
       {/* Performance Overview Row */}
       <div className="grid grid-cols-2 gap-6">

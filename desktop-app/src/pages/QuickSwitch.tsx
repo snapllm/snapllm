@@ -36,19 +36,19 @@ export default function QuickSwitch() {
   const { data: modelsResponse } = useQuery({
     queryKey: ['models'],
     queryFn: listModels,
-    refetchInterval: 5000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
   });
 
   const { data: healthData } = useQuery({
     queryKey: ['health'],
     queryFn: getHealth,
-    refetchInterval: 10000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 10000,
   });
 
   const { data: metricsData } = useQuery({
     queryKey: ['metrics'],
     queryFn: getMetrics,
-    refetchInterval: 5000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
   });
 
   // Calculate availability from metrics (successful requests / total requests)

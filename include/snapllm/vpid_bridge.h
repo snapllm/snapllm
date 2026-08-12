@@ -23,6 +23,7 @@
 #include <shared_mutex>
 #include <condition_variable>
 #include <functional>
+#include <atomic>
 #include <filesystem>
 #include <limits>
 
@@ -315,6 +316,14 @@ public:
     bool rebalance_gpu_memory();
 
     /**
+     * Inject deterministic lifecycle failures for hardware-independent tests.
+     * These hooks are process-wide and must be reset after each test. They are
+     * intentionally opt-in and have no effect during normal operation.
+     */
+    static void set_reload_failure_for_test(bool enabled) noexcept;
+    static void set_rebalance_failure_for_test(bool enabled) noexcept;
+
+    /**
      * @brief Generate text from a prompt (Phase 4)
      *
      * This is the end-to-end inference function that:
@@ -491,6 +500,9 @@ private:
     std::unordered_map<std::string, size_t> model_vram_usage_;  // model_name -> VRAM in MB
     size_t total_vram_used_ = 0;  // Current total VRAM usage in MB
     size_t configured_vram_budget_mb_ = 0;  // 0 means capacity is unknown; do not evict speculatively
+
+    inline static std::atomic<bool> reload_failure_for_test_{false};
+    inline static std::atomic<bool> rebalance_failure_for_test_{false};
 
     /**
      * @brief Evict models until we have enough VRAM space

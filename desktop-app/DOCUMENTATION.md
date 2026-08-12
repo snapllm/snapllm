@@ -28,7 +28,7 @@ There is no Python/FastAPI service in this topology.
 - Zustand
 - Axios plus `fetch` for streaming requests
 - Tailwind CSS
-- Tauri 1 for the native shell
+- Tauri 2 for the native shell
 
 ## Source layout
 
@@ -108,15 +108,16 @@ hardware.
 Model/workspace paths selected through Tauri remain subject to two independent
 controls:
 
-- the Tauri filesystem scope in `tauri.conf.json`; and
+- the Tauri 2 capability filesystem scope in
+  `src-tauri/capabilities/default.json`; and
 - the server's canonical-path confinement to configured roots.
 
 ## Tauri security
 
-`src-tauri/tauri.conf.json` disables the global allowlist, enables only the file
-dialog and required filesystem operations, scopes those operations to model and
-workspace directories, and defines a Content Security Policy. Keep these scopes
-narrow when adding features.
+Tauri 2 capabilities disable implicit renderer IPC access, enable only the file
+dialog and required filesystem operations, scope those operations to model and
+workspace directories, and define a Content Security Policy in
+`src-tauri/tauri.conf.json`. Keep these scopes narrow when adding features.
 
 The renderer connects only to the local SnapLLM HTTP endpoint permitted by the
 CSP. Remote server support would require an explicit CSP and trust-boundary

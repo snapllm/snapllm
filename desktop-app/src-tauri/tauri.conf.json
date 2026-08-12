@@ -1,49 +1,15 @@
 {
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SnapLLM",
+  "version": "1.17.8",
+  "identifier": "com.snapllm.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
-    "devPath": "http://localhost:9780",
-    "distDir": "../dist",
-    "withGlobalTauri": false
+    "devUrl": "http://localhost:9780",
+    "frontendDist": "../dist"
   },
-  "package": {
-    "productName": "SnapLLM",
-    "version": "1.17.8"
-  },
-  "tauri": {
-    "allowlist": {
-      "all": false,
-      "dialog": {
-        "all": false,
-        "open": true
-      },
-      "fs": {
-        "all": false,
-        "readDir": true,
-        "copyFile": true,
-        "removeDir": false,
-        "exists": true,
-        "scope": [
-          "C:/Models/**",
-          "D:/Models/**",
-          "C:/SnapLLM_Workspace/**",
-          "D:/SnapLLM_Workspace/**",
-          "C:/Users/*/SnapLLM_Workspace/**"
-        ]
-      }
-    },
-    "bundle": {
-      "active": true,
-      "targets": "all",
-      "identifier": "com.snapllm.desktop",
-      "icon": [
-        "icons/32x32.png",
-        "icons/128x128.png",
-        "icons/128x128@2x.png",
-        "icons/icon.icns",
-        "icons/icon.ico"
-      ]
-    },
+  "app": {
     "security": {
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://localhost:6930 http://127.0.0.1:6930; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'"
     },
@@ -57,6 +23,17 @@
         "minWidth": 1200,
         "minHeight": 700
       }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
     ]
   }
 }

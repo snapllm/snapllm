@@ -223,6 +223,10 @@ if(BUILD_TESTING)
     add_executable(snapllm_model_lifecycle_test
         ${CMAKE_SOURCE_DIR}/tests/model_lifecycle_test.cpp
     )
+    # The lifecycle test exercises the bridge's fail-closed recovery hooks as
+    # well as the header-only accounting helpers, so link the real library
+    # instead of allowing stale unresolved declarations to pass configuration.
+    target_link_libraries(snapllm_model_lifecycle_test PRIVATE snapllm)
     target_include_directories(snapllm_model_lifecycle_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
     target_compile_options(snapllm_model_lifecycle_test PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/W4>
@@ -255,12 +259,25 @@ if(BUILD_TESTING)
     target_include_directories(snapllm_request_router_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
     add_test(NAME request_router COMMAND snapllm_request_router_test)
 
+    add_executable(snapllm_prefetch_engine_test
+        ${CMAKE_SOURCE_DIR}/tests/prefetch_engine_test.cpp
+    )
+    target_link_libraries(snapllm_prefetch_engine_test PRIVATE snapllm)
+    target_include_directories(snapllm_prefetch_engine_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_test(NAME prefetch_engine COMMAND snapllm_prefetch_engine_test)
+
     add_executable(snapllm_benchmark_throughput
         ${CMAKE_SOURCE_DIR}/tests/benchmark_throughput.cpp
     )
     target_include_directories(snapllm_benchmark_throughput PRIVATE
         ${CMAKE_SOURCE_DIR}/external/llama.cpp/vendor/cpp-httplib
     )
+
+    add_executable(snapllm_benchmark_switching
+        ${CMAKE_SOURCE_DIR}/tests/benchmark_switching.cpp
+    )
+    target_link_libraries(snapllm_benchmark_switching PRIVATE snapllm)
+    target_include_directories(snapllm_benchmark_switching PRIVATE ${CMAKE_SOURCE_DIR}/include)
 endif()
 
 # =============================================================================

@@ -93,6 +93,7 @@ Release/
 # =============================================================================
 # Test and temporary files
 # =============================================================================
+nul
 *.log
 *.tmp
 *.temp
@@ -251,3 +252,29 @@ site/
 *.backup_*
 *.orig
 *.rej
+
+# ============================================================================
+# Doctrine System (installed framework — kept local, NOT committed to SnapLLM)
+# ============================================================================
+# Framework corpus + activation + local MCP registration
+/.Doctrine.md
+/.Doctrine/
+/.doctrine-state/
+/.mcp.json
+/AGENTS.md
+/CLAUDE.md
+/.cursor/rules/doctrine.mdc
+# (.claude/ is already ignored above — that covers .claude/agents/)
+# Doctrine tools + tests dropped into shared dirs (SnapLLM's own files untouched)
+/tools/doctrine_*.py
+/tests/test_doctrine_*.py
+# NOTE: docs/ gate artifacts (adr/, briefs/, plans/, risk/, qa/, retro/, reviews/)
+# are deliberately NOT ignored — they hold SnapLLM's OWN engineering docs (the
+# security trust-boundary ADRs, the repo review, the risk register) authored via
+# Doctrine but about SnapLLM. If you'd rather keep those local too, add e.g.:
+#   /docs/briefs/    /docs/plans/    /docs/adr/    /docs/risk/    /docs/qa/
+
+# Local remediation verification build
+/build-security/
+/desktop-app/playwright-report/
+/desktop-app/test-results/

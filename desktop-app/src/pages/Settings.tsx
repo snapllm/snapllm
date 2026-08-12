@@ -47,6 +47,7 @@ type SettingsFormState = {
   cors_enabled: boolean;
   timeout_seconds: string;
   max_concurrent_requests: string;
+  max_active_inferences: string;
   max_models: string;
   default_ram_budget_mb: string;
   default_strategy: string;
@@ -80,6 +81,7 @@ const mapConfigToForm = (config: ConfigResponse): SettingsFormState => {
     cors_enabled: config.cors_enabled ?? true,
     timeout_seconds: String(config.timeout_seconds ?? 600),
     max_concurrent_requests: String(config.max_concurrent_requests ?? 8),
+    max_active_inferences: String(config.max_active_inferences ?? 1),
     max_models: String(config.max_models ?? 10),
     default_ram_budget_mb: String(config.default_ram_budget_mb ?? 16384),
     default_strategy: config.default_strategy || 'balanced',
@@ -130,6 +132,13 @@ const validateForm = (values: SettingsFormState): SettingsErrors => {
     errors.max_concurrent_requests = 'Max concurrent requests must be an integer.';
   } else if (maxConcurrent < 1 || maxConcurrent > 128) {
     errors.max_concurrent_requests = 'Max concurrent requests must be between 1 and 128.';
+  }
+
+  const maxActive = parseInteger(values.max_active_inferences);
+  if (maxActive === null) {
+    errors.max_active_inferences = 'Simultaneous inference slots must be an integer.';
+  } else if (maxActive < 1 || maxActive > (maxConcurrent ?? 1)) {
+    errors.max_active_inferences = 'Slots must be between 1 and Max Concurrent Requests.';
   }
 
   const maxModels = parseInteger(values.max_models);
@@ -302,6 +311,7 @@ export default function SettingsPage() {
         cors_enabled: formState.cors_enabled,
         timeout_seconds: Number(formState.timeout_seconds),
         max_concurrent_requests: Number(formState.max_concurrent_requests),
+        max_active_inferences: Number(formState.max_active_inferences),
       },
       workspace: {
         workspace_root: formState.workspace_root.trim(),
@@ -477,6 +487,17 @@ export default function SettingsPage() {
                 hint="Requires server restart"
                 min={1}
                 max={128}
+              />
+              <Input
+                label="Simultaneous Inference Slots"
+                type="number"
+                value={formState?.max_active_inferences || ''}
+                onChange={(event) => updateField('max_active_inferences', event.target.value)}
+                error={errors.max_active_inferences}
+                hint="Live-tunable GPU/CPU inference slots; start at 1"
+                leftIcon={<Cpu className="w-4 h-4" />}
+                min={1}
+                max={parseInteger(formState?.max_concurrent_requests || '128') || 128}
               />
             </div>
             <div className="space-y-2">

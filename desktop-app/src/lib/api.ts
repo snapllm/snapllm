@@ -4,8 +4,8 @@
  */
 
 import axios, { AxiosError } from 'axios';
-import { open } from '@tauri-apps/api/dialog';
-import { readDir, copyFile, exists } from '@tauri-apps/api/fs';
+import { open } from '@tauri-apps/plugin-dialog';
+import { readDir, copyFile, exists } from '@tauri-apps/plugin-fs';
 
 type BrowserLocation = Pick<Location, 'origin' | 'protocol'>;
 
@@ -830,7 +830,7 @@ export const scanFolder = async (folderPath: string): Promise<string[]> => {
   if (isTauriAvailable()) {
     console.log('[scanFolder] Trying Tauri readDir...');
     try {
-      const entries = await readDir(folderPath, { recursive: false });
+      const entries = await readDir(folderPath);
 
       // Filter for .gguf files and return full paths
       const ggufFiles = entries
@@ -920,7 +920,10 @@ export const getMetrics = async (): Promise<any> => {
     return data;
   } catch (error) {
     // Return empty metrics if endpoint doesn't exist
-    return { models: [], total_requests: 0, total_tokens_generated: 0, total_errors: 0, uptime_seconds: 0 };
+    return {
+      models: [], total_requests: 0, total_tokens_generated: 0, total_errors: 0, uptime_seconds: 0,
+      scheduler: { active_inferences: 0, max_active_inferences: 0, waiting_inferences: 0, admission: 'offline' },
+    };
   }
 };
 
@@ -988,7 +991,7 @@ export const getWorkspaceFolders = async (): Promise<WorkspaceFolderInfo[]> => {
 
       if (folderExists) {
         try {
-          const entries = await readDir(folder.path, { recursive: false });
+          const entries = await readDir(folder.path);
           fileCount = entries.length;
         } catch {
           fileCount = 0;
@@ -1073,7 +1076,7 @@ export const scanModelsFolder = async (
       return [];
     }
 
-    const entries = await readDir(modelsPath, { recursive: false });
+    const entries = await readDir(modelsPath);
 
     // Filter for .gguf files and return full paths
     const ggufFiles = entries
@@ -1374,6 +1377,7 @@ export interface ConfigResponse {
   cors_enabled?: boolean;
   timeout_seconds?: number;
   max_concurrent_requests?: number;
+  max_active_inferences?: number;
   max_models?: number;
   default_ram_budget_mb?: number;
   default_strategy?: string;
@@ -1388,6 +1392,7 @@ export interface ConfigUpdateRequest {
     cors_enabled?: boolean;
     timeout_seconds?: number;
     max_concurrent_requests?: number;
+    max_active_inferences?: number;
   };
   workspace?: {
     workspace_root?: string;
@@ -1405,6 +1410,7 @@ export interface ConfigUpdateRequest {
   cors_enabled?: boolean;
   timeout_seconds?: number;
   max_concurrent_requests?: number;
+  max_active_inferences?: number;
   workspace_root?: string;
   default_models_path?: string;
   max_models?: number;

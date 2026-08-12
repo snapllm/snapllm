@@ -5,7 +5,6 @@
 
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Layout
 import { Layout } from './components/layout/Layout';
@@ -32,20 +31,6 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { ensureDaemonRunning } from './lib/daemon';
 
 // ============================================================================
-// Query Client Configuration
-// ============================================================================
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 5000,
-      refetchOnWindowFocus: false,
-      retry: 2,
-    },
-  },
-});
-
-// ============================================================================
 // Main App Component
 // ============================================================================
 
@@ -54,7 +39,6 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <Routes>
             <Route element={<Layout />}>
@@ -86,7 +70,6 @@ function App() {
             </Route>
           </Routes>
         </BrowserRouter>
-      </QueryClientProvider>
     </ErrorBoundary>
   );
 }

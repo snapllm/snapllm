@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build-windows:
     # Pin the image that includes the Visual Studio 2022 generator used below.
@@ -145,7 +148,7 @@ jobs:
           bash scripts/ci_smoke_test.sh build_cpu/bin/snapllm
 
   desktop-app:
-    # Use current WebKitGTK while providing compatibility pkg-config names for Tauri 1.x.
+    # Use the WebKitGTK/libsoup3 stack required by Tauri 2.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -174,7 +177,7 @@ jobs:
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup2.4-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
           for pc in javascriptcoregtk webkit2gtk webkit2gtk-web-extension; do
             if [ -f "/usr/lib/x86_64-linux-gnu/pkgconfig/${pc}-4.1.pc" ]; then
               sudo ln -sf "${pc}-4.1.pc" "/usr/lib/x86_64-linux-gnu/pkgconfig/${pc}-4.0.pc"

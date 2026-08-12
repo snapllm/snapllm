@@ -52,7 +52,8 @@ endpoint.chat.request
 model medicine
 max_tokens 2000
 temperature 0.8
-stream false
+# Streaming defaults to true; set false for one buffered JSON response.
+stream true
 messages [
   {role system content "You are a medical assistant."}
   {role user content "What is diabetes?"}

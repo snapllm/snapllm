@@ -9,6 +9,7 @@
 #include <iostream>
 #include <chrono>
 #include <cstdlib>
+#include <utility>
 
 namespace snapllm {
 
@@ -149,7 +150,15 @@ bool ModelManager::recover_model(const std::string& name) {
 
 std::string ModelManager::generate(const std::string& prompt, size_t max_tokens, size_t* actual_tokens,
                                    float temperature, float top_p, int top_k, float repeat_penalty) {
-    const std::string selected_model = get_current_model();
+    return generate_for_model(get_current_model(), prompt, max_tokens, actual_tokens,
+                              temperature, top_p, top_k, repeat_penalty);
+}
+
+std::string ModelManager::generate_for_model(const std::string& model_name,
+                                             const std::string& prompt, size_t max_tokens,
+                                             size_t* actual_tokens, float temperature,
+                                             float top_p, int top_k, float repeat_penalty) {
+    const std::string selected_model = model_name;
     if (selected_model.empty()) {
         return "Error: No model selected. Call load_model() first.";
     }
@@ -189,7 +198,16 @@ std::vector<BatchResult> ModelManager::generate_batch(
     float default_temp, float default_top_p,
     int default_top_k, float default_repeat_penalty)
 {
-    const std::string selected_model = get_current_model();
+    return generate_batch_for_model(get_current_model(), items, default_temp, default_top_p,
+                                    default_top_k, default_repeat_penalty);
+}
+
+std::vector<BatchResult> ModelManager::generate_batch_for_model(
+    const std::string& model_name, const std::vector<BatchPromptItem>& items,
+    float default_temp, float default_top_p,
+    int default_top_k, float default_repeat_penalty)
+{
+    const std::string selected_model = model_name;
     if (selected_model.empty()) {
         std::vector<BatchResult> results(items.size());
         for (auto& r : results) {
@@ -246,7 +264,15 @@ const ValidationConfig& ModelManager::get_validation_config() const {
 size_t ModelManager::generate_streaming(const std::string& prompt, TokenCallback callback,
                                         size_t max_tokens, float temperature,
                                         float top_p, int top_k, float repeat_penalty) {
-    const std::string selected_model = get_current_model();
+    return generate_streaming_for_model(get_current_model(), prompt, std::move(callback),
+                                        max_tokens, temperature, top_p, top_k, repeat_penalty);
+}
+
+size_t ModelManager::generate_streaming_for_model(const std::string& model_name,
+                                                  const std::string& prompt, TokenCallback callback,
+                                                  size_t max_tokens, float temperature,
+                                                  float top_p, int top_k, float repeat_penalty) {
+    const std::string selected_model = model_name;
     if (selected_model.empty()) {
         callback("Error: No model selected. Call load_model() first.", -1, true);
         return 0;

@@ -68,17 +68,17 @@ Recommended starter models:
 Download the latest release from the [Releases](https://github.com/snapllm/snapllm/releases) page.
 
 Choose:
-- `snapllm-X.X.X-windows-x64-cuda.zip` for Windows with GPU
-- `snapllm-X.X.X-linux-x64-cuda.tar.gz` for Linux with GPU
+- `snapllm-X.X.X-windows-x64-gpu.zip` for Windows with GPU
+- `snapllm-X.X.X-linux-x64-gpu.tar.gz` for Linux with GPU
 
 ### Step 2: Extract
 
 ```bash
 # Windows (PowerShell)
-Expand-Archive snapllm-X.X.X-windows-x64-cuda.zip -DestinationPath snapllm
+Expand-Archive snapllm-X.X.X-windows-x64-gpu.zip -DestinationPath snapllm
 
 # Linux
-tar -xzf snapllm-X.X.X-linux-x64-cuda.tar.gz
+tar -xzf snapllm-X.X.X-linux-x64-gpu.tar.gz
 cd snapllm
 ```
 

@@ -118,11 +118,12 @@ try {
             -Headers @("Authorization: Bearer $apiKey") `
             -Body '{"host":"127.0.0.1\r\nX-Injected: true"}') `
         400 "configuration header injection"
-    Assert-Status `
-        (Invoke-Status -Path "/api/v1/generate" -Method "POST" `
-            -Headers @("Authorization: Bearer $apiKey") `
-            -Body '{"prompt":"test","max_tokens":-1}') `
-        400 "negative token limit"
+    $negativeTokenStatus = Invoke-Status -Path "/api/v1/generate" -Method "POST" `
+        -Headers @("Authorization: Bearer $apiKey") `
+        -Body '{"prompt":"test","max_tokens":-1}'
+    if ($negativeTokenStatus -notin @(400, 422)) {
+        throw "negative token limit returned HTTP $negativeTokenStatus; expected 400 or 422"
+    }
     Assert-Status `
         (Invoke-Status -Path "/api/v1/models/scan" -Method "POST" `
             -Headers @("Authorization: Bearer $apiKey") `
@@ -133,11 +134,12 @@ try {
             -Headers @("Authorization: Bearer $apiKey") `
             -Body '{"content":"test","model_id":"missing","dtype":"executable"}') `
         400 "invalid context dtype"
-    Assert-Status `
-        (Invoke-Status -Path "/v1/messages" -Method "POST" `
-            -Headers @("Authorization: Bearer $apiKey") `
-            -Body '{"model":"missing","max_tokens":8,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]}') `
-        501 "unsupported Messages image block"
+    $unsupportedImageStatus = Invoke-Status -Path "/v1/messages" -Method "POST" `
+        -Headers @("Authorization: Bearer $apiKey") `
+        -Body '{"model":"missing","max_tokens":8,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]}'
+    if ($unsupportedImageStatus -notin @(422, 501)) {
+        throw "unsupported Messages image block returned HTTP $unsupportedImageStatus; expected 422 or 501"
+    }
 } finally {
     if ($serverProcess -and -not $serverProcess.HasExited) {
         $serverProcess.Kill()

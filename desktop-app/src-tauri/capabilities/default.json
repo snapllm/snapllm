@@ -1,0 +1,43 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Least-privilege permissions for the main SnapLLM window.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [
+        { "path": "C:/Models/**" },
+        { "path": "D:/Models/**" },
+        { "path": "C:/SnapLLM_Workspace/**" },
+        { "path": "D:/SnapLLM_Workspace/**" },
+        { "path": "$HOME/Models/**" },
+        { "path": "$HOME/SnapLLM_Workspace/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-copy-file",
+      "allow": [
+        { "path": "C:/Models/**" },
+        { "path": "D:/Models/**" },
+        { "path": "C:/SnapLLM_Workspace/**" },
+        { "path": "D:/SnapLLM_Workspace/**" },
+        { "path": "$HOME/Models/**" },
+        { "path": "$HOME/SnapLLM_Workspace/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        { "path": "C:/Models/**" },
+        { "path": "D:/Models/**" },
+        { "path": "C:/SnapLLM_Workspace/**" },
+        { "path": "D:/SnapLLM_Workspace/**" },
+        { "path": "$HOME/Models/**" },
+        { "path": "$HOME/SnapLLM_Workspace/**" }
+      ]
+    }
+  ]
+}

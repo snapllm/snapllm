@@ -47,6 +47,20 @@ int main() {
     std::error_code cleanup_error;
     std::filesystem::remove(fixture, cleanup_error);
     check(!checked_model_size_mb(fixture), "missing model size fails closed");
+
+    // GPU recovery failures must be testable without requiring CUDA hardware.
+    // The hooks are opt-in and reset immediately after each assertion.
+    snapllm::VPIDBridge::set_rebalance_failure_for_test(true);
+    snapllm::VPIDBridge recovery_bridge;
+    check(!recovery_bridge.rebalance_gpu_memory(),
+          "injected GPU rebalance failure is reported");
+    snapllm::VPIDBridge::set_rebalance_failure_for_test(false);
+    snapllm::VPIDBridge::set_reload_failure_for_test(true);
+    check(!recovery_bridge.load_and_dequantize_model(
+              "recovery-test", fixture.string()),
+          "injected model reload failure is reported");
+    snapllm::VPIDBridge::set_reload_failure_for_test(false);
+
     ContextLifetimeTracker lifetimes;
     auto lease = std::async(std::launch::async, [&lifetimes] {
         return lifetimes.acquire("model");

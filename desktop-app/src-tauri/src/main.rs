@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::process::{Command, Stdio};
+use tauri::Manager;
 
 fn daemon_executable(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     if let Ok(path) = std::env::var("SNAPLLM_CLI_PATH") {
@@ -22,7 +23,7 @@ fn daemon_executable(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
             candidates.push(parent.join("resources").join(binary));
         }
     }
-    if let Some(resource) = app.path_resolver().resource_dir() {
+    if let Ok(resource) = app.path().resource_dir() {
         candidates.push(resource.join(binary));
     }
     candidates.into_iter().find(|candidate| candidate.is_file())
@@ -83,6 +84,8 @@ fn daemon_stop(app: tauri::AppHandle) -> Result<String, String> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             daemon_status,
             daemon_start,

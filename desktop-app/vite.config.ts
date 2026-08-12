@@ -33,9 +33,29 @@ export default defineConfig({
   build: {
     // Match the TypeScript output and the evergreen WebViews supported by Tauri.
     target: 'es2020',
+    // The syntax-highlighting grammar bundle is intentionally isolated and
+    // loaded only by MarkdownRenderer; keep its documented size from being
+    // reported as a failed build warning.
+    chunkSizeWarningLimit: 700,
     // don't minify for debug builds
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
     // produce sourcemaps for debug builds
     sourcemap: !!process.env.TAURI_DEBUG,
+    // Keep the application shell separate from heavyweight editor/chart
+    // dependencies so the initial desktop/web load does not carry the entire
+    // vendor graph in one cache-invalidating chunk.
+    rolldownOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (/node_modules[\\/](@?react(?:-dom)?|react-router(?:-dom)?)[\\/]/.test(id)) return 'react';
+          if (/codemirror|uiw/.test(id)) return 'editor';
+          if (/recharts|reactflow/.test(id)) return 'charts';
+          if (/react-syntax-highlighter/.test(id)) return 'syntax';
+          if (/react-markdown|remark-gfm/.test(id)) return 'markdown';
+          return 'vendor';
+        },
+      },
+    },
   },
 })

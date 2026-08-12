@@ -6,8 +6,8 @@ setlocal enabledelayedexpansion
 :: ============================================================================
 :: This script creates a distributable release package with all necessary files.
 ::
-:: Usage: package_release.bat [version]
-:: Example: package_release.bat 1.3.1
+:: Usage: package_release.bat [version] [cpu|gpu]
+:: Example: package_release.bat 1.17.8 cpu
 :: ============================================================================
 
 echo.
@@ -19,19 +19,26 @@ echo.
 :: Get version from argument or use default
 set "VERSION=%~1"
 if "%VERSION%"=="" set "VERSION=1.17.8"
+set "MODE=%~2"
+if "%MODE%"=="" set "MODE=cpu"
+if /i "%MODE%"=="cuda" set "MODE=gpu"
 powershell -NoProfile -Command "if ($env:VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { exit 1 }"
 if errorlevel 1 (
     echo [ERROR] Version must match MAJOR.MINOR.PATCH.
     exit /b 1
 )
+if /i not "%MODE%"=="cpu" if /i not "%MODE%"=="gpu" (
+    echo [ERROR] Mode must be cpu or gpu.
+    exit /b 1
+)
 
-set "RELEASE_NAME=snapllm-%VERSION%-windows-x64-cuda"
+set "RELEASE_NAME=snapllm-%VERSION%-windows-x64-%MODE%"
 set "RELEASE_DIR=releases\%RELEASE_NAME%"
-set "BUILD_DIR=build_gpu"
+set "BUILD_DIR=build_%MODE%"
 
 :: Check if build exists
 if not exist "%BUILD_DIR%\bin\snapllm.exe" (
-    echo [ERROR] Build not found! Run build_gpu.bat first.
+    echo [ERROR] Build not found! Run build_%MODE%.bat first.
     echo.
     pause
     exit /b 1
@@ -48,6 +55,12 @@ mkdir "%RELEASE_DIR%"
 mkdir "%RELEASE_DIR%\bin"
 mkdir "%RELEASE_DIR%\examples"
 mkdir "%RELEASE_DIR%\docs"
+mkdir "%RELEASE_DIR%\ui"
+
+if not exist "desktop-app\dist\index.html" (
+    echo [ERROR] Web UI build not found. Run npm --prefix desktop-app run build first.
+    exit /b 1
+)
 
 :: Copy main executable
 echo [2/6] Copying executable...
@@ -65,6 +78,8 @@ copy "README.md" "%RELEASE_DIR%\" > nul
 copy "LICENSE" "%RELEASE_DIR%\" > nul
 copy "QUICKSTART.md" "%RELEASE_DIR%\" > nul 2>&1
 copy "docs\*.md" "%RELEASE_DIR%\docs\" > nul 2>&1
+echo [INFO] Copying web UI...
+xcopy "desktop-app\dist\*" "%RELEASE_DIR%\ui\" /E /I /Y > nul
 
 :: Copy examples
 echo [5/6] Copying examples...
@@ -80,35 +95,17 @@ echo @echo off
 echo echo Starting SnapLLM Server...
 echo echo.
 echo cd /d "%%~dp0"
-echo bin\snapllm.exe --server --port 6930 %%*
+echo bin\snapllm.exe --server --port 6930 --ui-dir ui %%*
 echo pause
 ) > "%RELEASE_DIR%\run_server.bat"
 
 :: Create run_server_with_model.bat
 (
 echo @echo off
-echo echo.
-echo echo  SnapLLM Server with Model
-echo echo  =========================
-echo echo.
-echo set /p MODEL_PATH="Enter path to your .gguf model file: "
-echo set /p MODEL_NAME="Enter a name for this model: "
-echo powershell -NoProfile -Command "$p=$env:MODEL_PATH; if ([string]::IsNullOrWhiteSpace($p) -or $p -match '[\"&|^<^>^^%%!`r`n]' -or [IO.Path]::GetExtension($p) -ine '.gguf' -or -not [IO.Path]::IsPathFullyQualified($p) -or -not (Test-Path -LiteralPath $p -PathType Leaf)) { exit 1 }"
-echo if errorlevel 1 ^(
-echo   echo Invalid model path. Use an existing absolute .gguf path without command metacharacters.
-echo   exit /b 1
-echo ^)
-echo powershell -NoProfile -Command "if ($env:MODEL_NAME -notmatch '^[A-Za-z0-9._-]{1,128}$') { exit 1 }"
-echo if errorlevel 1 ^(
-echo   echo Invalid model name. Use 1-128 letters, digits, dots, underscores, or hyphens.
-echo   exit /b 1
-echo ^)
-echo echo.
-echo echo Starting server with model: "%%MODEL_NAME%%"
-echo cd /d "%%~dp0"
-echo bin\snapllm.exe --server --port 6930 --load-model "%%MODEL_NAME%%" "%%MODEL_PATH%%"
+echo powershell -NoProfile -ExecutionPolicy Bypass -File "%%~dp0run_server_with_model.ps1"
 echo pause
 ) > "%RELEASE_DIR%\run_server_with_model.bat"
+copy "scripts\run_server_with_model.ps1" "%RELEASE_DIR%\" > nul
 
 :: Create VERSION file
 echo %VERSION% > "%RELEASE_DIR%\VERSION"

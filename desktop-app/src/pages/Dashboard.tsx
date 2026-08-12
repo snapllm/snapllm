@@ -250,7 +250,7 @@ export default function Dashboard() {
     queryKey: ['serverMetrics'],
     queryFn: getMetrics,
     refetchInterval: settings.autoRefresh ? settings.refreshInterval : false,
-    retry: 2,
+    retry: false,
     staleTime: 1000,
   });
 

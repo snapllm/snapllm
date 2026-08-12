@@ -83,11 +83,24 @@ npm run tauri:dev    # Native development window
 npm run tauri:build  # Native installer/bundle
 ```
 
+Live API browser tests can start a local daemon automatically by setting
+`SNAPLLM_E2E_API_COMMAND` to a trusted local command. For example:
+
+```powershell
+$env:SNAPLLM_E2E_API_COMMAND = '.\\build_core\\bin\\snapllm.exe --server --host 127.0.0.1 --port 6930 --load-model lfm D:\\Models\\LFM2.5-1.2B-Instruct-Q5_K_M.gguf --gpu-layers 0'
+npm run test:e2e
+```
+
+Without that variable, offline and mocked UI tests remain deterministic and
+live API tests fail clearly on the missing daemon instead of silently using a
+different service.
+
 ## Security boundaries
 
-The Tauri shell uses an explicit Content Security Policy and a narrow
-allowlist. Filesystem operations are limited to the configured model/workspace
-scopes. Selecting a file in the UI does not relax the SnapLLM server's own path
+The Tauri shell uses an explicit Content Security Policy and a narrow Tauri 2
+capability set. Filesystem operations are limited to the configured
+model/workspace scopes in `src-tauri/capabilities/default.json`. Selecting a
+file in the UI does not relax the SnapLLM server's own path
 confinement: API-supplied paths must still remain within configured roots.
 
 Do not put API keys in `VITE_*` variables; Vite embeds those values into client

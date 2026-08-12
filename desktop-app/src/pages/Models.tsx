@@ -1114,19 +1114,19 @@ export default function Models() {
   } = useQuery({
     queryKey: ['models'],
     queryFn: listModels,
-    refetchInterval: 5000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
   });
 
   const { data: availableModels, isLoading: isLoadingAvailable } = useQuery({
     queryKey: ['available-models'],
     queryFn: scanModelsFolder,
-    refetchInterval: 10000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 10000,
   });
 
   const { data: cacheStats } = useQuery({
     queryKey: ['cache-stats'],
     queryFn: getCacheStats,
-    refetchInterval: 10000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 10000,
   });
 
   const models = modelsResponse?.models || [];

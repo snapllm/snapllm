@@ -68,7 +68,7 @@ export const useHealth = (options?: UseQueryOptions<HealthResponse, Error>) => {
   return useQuery<HealthResponse, Error>({
     queryKey: queryKeys.health,
     queryFn: getHealth,
-    refetchInterval: 10000, // Refetch every 10 seconds
+    refetchInterval: (query) => query.state.status === 'error' ? false : 10000,
     retry: false,
     ...options,
   });
@@ -82,7 +82,7 @@ export const useModels = (options?: UseQueryOptions<ModelListResponse, Error>) =
   return useQuery<ModelListResponse, Error>({
     queryKey: queryKeys.modelList(),
     queryFn: () => listModels(),
-    refetchInterval: 5000, // Refetch every 5 seconds
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
     ...options,
   });
 };
@@ -200,8 +200,8 @@ export const useCacheStats = () => {
   return useQuery<CacheStatsResponse, Error>({
     queryKey: ['cacheStats'],
     queryFn: getCacheStats,
-    refetchInterval: 5000,
-    retry: 1,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
+    retry: false,
   });
 };
 
@@ -216,7 +216,7 @@ export const useContextList = (tier?: string, modelId?: string, options?: UseQue
   return useQuery<ContextListResponse, Error>({
     queryKey: queryKeys.contextList(tier, modelId),
     queryFn: () => listContexts(tier, modelId),
-    refetchInterval: 10000, // Refetch every 10 seconds
+    refetchInterval: (query) => query.state.status === 'error' ? false : 10000,
     ...options,
   });
 };
@@ -240,8 +240,8 @@ export const useContextStats = (options?: UseQueryOptions<ContextStatsResponse, 
   return useQuery<ContextStatsResponse, Error>({
     queryKey: queryKeys.contextStats(),
     queryFn: getContextStats,
-    refetchInterval: 5000, // Refetch every 5 seconds
-    retry: 1,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
+    retry: false,
     ...options,
   });
 };

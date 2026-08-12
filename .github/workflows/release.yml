@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing signed-off release tag (for example v1.3.1)
+        description: Existing signed-off release tag (for example v1.17.8)
         required: true
         type: string
 
@@ -71,9 +71,7 @@ jobs:
       - name: Install dependencies
         run: npm --prefix desktop-app ci
       - name: Dependency audit
-        # High-severity React Router advisories are reviewed/closed for this
-        # application; retain a blocking gate for critical vulnerabilities.
-        run: npm --prefix desktop-app audit --audit-level=critical
+        run: npm --prefix desktop-app run audit
       - name: Unit tests
         run: npm --prefix desktop-app test -- --run
       - name: Lint
@@ -85,7 +83,10 @@ jobs:
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup2.4-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          # Tauri 2 uses WebKitGTK 4.1 and libsoup3. Keep the native package
+          # set aligned with the Rust lockfile; omitting libsoup3 makes the
+          # desktop build fail during webkit2gtk-sys detection.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
           for pc in javascriptcoregtk webkit2gtk webkit2gtk-web-extension; do
             if [ -f "/usr/lib/x86_64-linux-gnu/pkgconfig/${pc}-4.1.pc" ]; then
               sudo ln -sf "${pc}-4.1.pc" "/usr/lib/x86_64-linux-gnu/pkgconfig/${pc}-4.0.pc"

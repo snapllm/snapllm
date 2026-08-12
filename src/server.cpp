@@ -393,7 +393,8 @@ static json build_persisted_config(const ServerConfig& config) {
             {"port", config.port},
             {"cors_enabled", config.cors_enabled},
             {"timeout_seconds", config.timeout_seconds},
-            {"max_concurrent_requests", config.max_concurrent_requests}
+            {"max_concurrent_requests", config.max_concurrent_requests},
+            {"max_active_inferences", config.max_active_inferences}
         }},
         {"workspace", {
             {"root", resolve_workspace(config.workspace_root)},
@@ -670,16 +671,29 @@ SnapLLMServer::SnapLLMServer(const ServerConfig& config)
     // Initialize context manager (vPID L2)
     context_manager_ = std::make_unique<ContextManager>(manager_.get(), workspace_paths_);
 
-    // Configure inference concurrency limits
-    // HTTP-level gate: only 1 inference at a time for GPU safety
-    // This prevents GPU OOM by blocking at the HTTP handler level
-    // BEFORE any llama_context allocation or model switching occurs
-    max_active_inferences_ = 1;  // Serialize GPU inference completely
+    // Configure inference concurrency limits.  Keep the conservative serial
+    // default for GPU safety, but allow an explicit deployment opt-in so a
+    // server with enough VRAM can serve multiple independent contexts.
+    max_active_inferences_ = (std::max)(1, (std::min)(config_.max_active_inferences,
+                                                       config_.max_concurrent_requests));
+    if (const char* configured = std::getenv("SNAPLLM_MAX_ACTIVE_INFERENCES")) {
+        try {
+            const long parsed = std::stol(configured);
+            if (parsed >= 1 && parsed <= config_.max_concurrent_requests) {
+                max_active_inferences_ = static_cast<int>(parsed);
+            } else {
+                std::cerr << "[SnapLLM] Ignoring SNAPLLM_MAX_ACTIVE_INFERENCES outside 1.."
+                          << config_.max_concurrent_requests << std::endl;
+            }
+        } catch (const std::exception&) {
+            std::cerr << "[SnapLLM] Ignoring invalid SNAPLLM_MAX_ACTIVE_INFERENCES" << std::endl;
+        }
+    }
     std::cout << "[SnapLLM] HTTP inference gate: max " << max_active_inferences_ << " concurrent" << std::endl;
 
     // Also configure VPIDBridge-level semaphore as a safety net
     if (auto bridge = manager_->get_bridge()) {
-        bridge->set_max_concurrent_inferences(1);
+        bridge->set_max_concurrent_inferences(max_active_inferences_);
     }
 
     setup_middleware();
@@ -697,10 +711,12 @@ SnapLLMServer::~SnapLLMServer() {
 // ============================================================================
 
 bool SnapLLMServer::acquire_inference_gate(int timeout_ms) {
+    waiting_inference_count_.fetch_add(1, std::memory_order_relaxed);
     std::unique_lock<std::mutex> lock(inference_gate_mutex_);
     bool acquired = inference_gate_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this] {
         return active_inference_count_ < max_active_inferences_;
     });
+    waiting_inference_count_.fetch_sub(1, std::memory_order_relaxed);
     if (acquired) {
         active_inference_count_++;
         std::cout << "[SnapLLM Gate] Acquired inference slot (" << active_inference_count_
@@ -746,6 +762,43 @@ void SnapLLMServer::record_model_metrics(const std::string& model_id,
     metrics.requests += request_count;
     metrics.tokens_generated += tokens_generated;
     metrics.total_latency_ms += latency_ms;
+}
+
+void SnapLLMServer::model_request_started(const std::string& model_id) {
+    if (model_id.empty()) return;
+    std::lock_guard<std::mutex> lock(model_metrics_mutex_);
+    ++model_metrics_[model_id].in_flight;
+}
+
+void SnapLLMServer::model_request_finished(const std::string& model_id) {
+    if (model_id.empty()) return;
+    std::lock_guard<std::mutex> lock(model_metrics_mutex_);
+    auto it = model_metrics_.find(model_id);
+    if (it != model_metrics_.end() && it->second.in_flight > 0) {
+        --it->second.in_flight;
+    }
+}
+
+RouteDecision SnapLLMServer::choose_scheduled_model(const RouteRequest& request) {
+    const auto loaded = manager_->get_loaded_models();
+    std::vector<ModelType> types;
+    std::vector<ModelLoad> loads;
+    types.reserve(loaded.size());
+    loads.reserve(loaded.size());
+    std::lock_guard<std::mutex> metrics_lock(model_metrics_mutex_);
+    for (const auto& name : loaded) {
+        types.push_back(manager_->get_model_type(name));
+        ModelLoad load;
+        const auto it = model_metrics_.find(name);
+        if (it != model_metrics_.end()) {
+            load.in_flight = it->second.in_flight;
+            load.average_latency_ms = it->second.requests > 0
+                ? it->second.total_latency_ms / static_cast<double>(it->second.requests) : 0.0;
+        }
+        loads.push_back(load);
+    }
+    return RequestRouter::choose(request, loaded, types, manager_->get_current_model(),
+                                 loads, routing_cursor_.fetch_add(1, std::memory_order_relaxed));
 }
 
 // ============================================================================
@@ -1118,6 +1171,13 @@ void SnapLLMServer::setup_routes() {
     // Config and recommendations endpoints for Settings page
     svr_->Get("/api/v1/config", [this](const httplib::Request& req, httplib::Response& res) {
         if (!authorize_request(req, res, true)) return;
+        int active_inferences = 0;
+        int max_active_inferences = 0;
+        {
+            std::lock_guard<std::mutex> lock(inference_gate_mutex_);
+            active_inferences = active_inference_count_;
+            max_active_inferences = max_active_inferences_;
+        }
         json response = {
             {"status", "success"},
             {"max_models", config_.max_models},
@@ -1132,6 +1192,13 @@ void SnapLLMServer::setup_routes() {
             {"cors_enabled", config_.cors_enabled},
             {"timeout_seconds", config_.timeout_seconds},
             {"max_concurrent_requests", config_.max_concurrent_requests},
+            {"max_active_inferences", max_active_inferences},
+            {"scheduler", {
+                {"max_active_inferences", max_active_inferences},
+                {"active_inferences", active_inferences},
+                {"waiting_inferences", waiting_inference_count_.load(std::memory_order_relaxed)},
+                {"queue_limit", std::min(config_.max_concurrent_requests * 8, 256)}
+            }},
             {"features", {
                 {"llm", true},
 #ifdef SNAPLLM_HAS_DIFFUSION
@@ -1431,6 +1498,12 @@ void SnapLLMServer::handle_models_extended(const httplib::Request& req, httplib:
     // Add LLM models (from ModelManager)
     for (const auto& model : models) {
         std::string model_type = "llm";  // Default type for models in ModelManager
+        // `memory_bytes` is the bridge's tracked GPU residency for the model.
+        // CPU-only loads intentionally report zero here, so do not label them
+        // as GPU-backed merely because the server was built with GPU support.
+        const auto model_info = manager_->get_model_info(model);
+        const std::string device =
+            model_info && model_info->memory_bytes > 0 ? "gpu" : "cpu";
 
         // Check if this model should be included based on filter
         if (!type_filter.empty() && type_filter != "llm" && type_filter != "text") {
@@ -1444,7 +1517,7 @@ void SnapLLMServer::handle_models_extended(const httplib::Request& req, httplib:
             {"active", model == current},
             {"status", "loaded"},
             {"engine", "vpid"},
-            {"device", "gpu"}
+            {"device", device}
         });
     }
 
@@ -1550,14 +1623,35 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
         for (const auto& loaded_name : loaded_for_route) {
             types_for_route.push_back(manager_->get_model_type(loaded_name));
         }
+        std::vector<ModelLoad> loads_for_route;
+        loads_for_route.reserve(loaded_for_route.size());
+        {
+            std::lock_guard<std::mutex> metrics_lock(model_metrics_mutex_);
+            for (const auto& loaded_name : loaded_for_route) {
+                ModelLoad load;
+                const auto it = model_metrics_.find(loaded_name);
+                if (it != model_metrics_.end()) {
+                    load.in_flight = it->second.in_flight;
+                    load.average_latency_ms = it->second.requests > 0
+                        ? it->second.total_latency_ms / static_cast<double>(it->second.requests)
+                        : 0.0;
+                }
+                loads_for_route.push_back(load);
+            }
+        }
         const auto route = RequestRouter::choose(route_request, loaded_for_route,
-                                                 types_for_route, manager_->get_current_model());
+                                                 types_for_route, manager_->get_current_model(),
+                                                 loads_for_route,
+                                                 routing_cursor_.fetch_add(1, std::memory_order_relaxed));
         if (!route.accepted) {
             send_error(res, route.error, "route_rejected", 422);
             return;
         }
         model = route.model;
-        bool stream = body.value("stream", false);
+        // Streaming is the responsive default for chat clients. Callers that
+        // require a single buffered JSON response can still opt out with
+        // `"stream": false`.
+        bool stream = body.value("stream", true);
         int max_tokens = 0;
         if (!read_bounded_integer(
                 body, "max_tokens", 2000,
@@ -1594,19 +1688,18 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
             return;
         }
 
-        // Switch model if needed (vPID L1) - protected by mutex
-        if (!model.empty() && model != manager_->get_current_model()) {
-            std::lock_guard<std::mutex> switch_lock(model_switch_mutex_);
-            if (!manager_->switch_model(model)) {
-                send_error(res, "Model not loaded: " + model, "model_not_found", 404);
-                return;
-            }
-        }
-
-        // Check if we have an active model
-        std::string current_model = manager_->get_current_model();
+        // Resolve the request model without mutating process-wide selection.
+        std::string current_model = model.empty() ? manager_->get_current_model() : model;
+        model_request_started(current_model);
+        InferenceGateGuard model_metrics_guard(true, [this, current_model]() {
+            model_request_finished(current_model);
+        });
         if (current_model.empty()) {
             send_error(res, "No model loaded. Load a model first via POST /api/v1/models/load", "no_model", 400);
+            return;
+        }
+        if (!manager_->is_loaded(current_model)) {
+            send_error(res, "Model not loaded: " + current_model, "model_not_found", 404);
             return;
         }
 
@@ -1706,7 +1799,7 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
                                 const std::string& token, int /*token_id*/, bool is_done) {
 
                                 if (!sink.is_writable()) {
-                                    return;  // Client disconnected
+                                    return false;  // Client disconnected
                                 }
 
                                 // Build chunk
@@ -1727,6 +1820,7 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
 
                                 std::string data = "data: " + chunk.dump() + "\n\n";
                                 sink.write(data.data(), data.size());
+                                return sink.is_writable();
                             },
                             config
                         );
@@ -1772,8 +1866,8 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
                     [this, full_prompt, max_tokens, temperature, top_p, top_k, repeat_penalty,
                      completion_id, created, current_model](size_t /*offset*/, httplib::DataSink& sink) {
                         auto stream_start = std::chrono::high_resolution_clock::now();
-                        size_t streamed_tokens = manager_->generate_streaming(
-                            full_prompt,
+                        size_t streamed_tokens = manager_->generate_streaming_for_model(
+                            current_model, full_prompt,
                             [&sink, &completion_id, &created, &current_model](
                                 const std::string& token, int /*token_id*/, bool is_eos) -> bool {
 
@@ -1869,8 +1963,8 @@ void SnapLLMServer::handle_chat_completions(const httplib::Request& req, httplib
                 std::string full_prompt = context_text + "User: " + query_text + "\n\nAssistant:";
 
                 size_t actual_tokens = 0;
-                result = manager_->generate(
-                    full_prompt, static_cast<size_t>(max_tokens), &actual_tokens,
+                result = manager_->generate_for_model(
+                    current_model, full_prompt, static_cast<size_t>(max_tokens), &actual_tokens,
                     temperature, top_p, top_k, repeat_penalty
                 );
 
@@ -1972,6 +2066,15 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
             send_error(res, validation_error);
             return;
         }
+        RouteRequest scheduled_request;
+        scheduled_request.requested_model = model;
+        scheduled_request.modality = "text";
+        const auto scheduled_route = choose_scheduled_model(scheduled_request);
+        if (!scheduled_route.accepted) {
+            send_error(res, scheduled_route.error, "route_rejected", 422);
+            return;
+        }
+        model = scheduled_route.model;
         bool stream = body.value("stream", false);
         int max_tokens = 0;
         if (!read_bounded_integer(
@@ -2183,38 +2286,12 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
             return;
         }
 
-        // Switch model if needed - protected by mutex
-        if (!model.empty() && model != manager_->get_current_model()) {
-            std::lock_guard<std::mutex> switch_lock(model_switch_mutex_);
-            if (!manager_->switch_model(model)) {
-                // Try to find a partial match
-                auto models = manager_->get_loaded_models();
-                bool found = false;
-                for (const auto& m : models) {
-                    if (m.find(model) != std::string::npos || model.find(m) != std::string::npos) {
-                        manager_->switch_model(m);
-                        model = m;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    json error = {
-                        {"type", "error"},
-                        {"error", {
-                            {"type", "not_found_error"},
-                            {"message", "Model not loaded: " + model}
-                        }}
-                    };
-                    res.status = 404;
-                    res.set_content(error.dump(), MIMETYPE_JSON);
-                    return;
-                }
-            }
-        }
-
-        // Check if we have an active model
-        std::string current_model = manager_->get_current_model();
+        // Resolve the request model without mutating process-wide selection.
+        std::string current_model = model.empty() ? manager_->get_current_model() : model;
+        model_request_started(current_model);
+        InferenceGateGuard model_metrics_guard(true, [this, current_model]() {
+            model_request_finished(current_model);
+        });
         if (current_model.empty()) {
             json error = {
                 {"type", "error"},
@@ -2224,6 +2301,13 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
                 }}
             };
             res.status = 400;
+            res.set_content(error.dump(), MIMETYPE_JSON);
+            return;
+        }
+        if (!manager_->is_loaded(current_model)) {
+            json error = {{"type", "error"}, {"error", {{"type", "not_found_error"},
+                {"message", "Model not loaded: " + current_model}}}};
+            res.status = 404;
             res.set_content(error.dump(), MIMETYPE_JSON);
             return;
         }
@@ -2276,8 +2360,8 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
                     // Generate with streaming callback
                     int output_tokens = 0;
                     auto stream_start = std::chrono::high_resolution_clock::now();
-                    manager_->generate_streaming(
-                        prompt,
+                    manager_->generate_streaming_for_model(
+                        current_model, prompt,
                         [&sink, &output_tokens](
                             const std::string& token, int /*token_id*/, bool is_eos) -> bool {
 
@@ -2348,8 +2432,8 @@ void SnapLLMServer::handle_messages(const httplib::Request& req, httplib::Respon
             auto start_time = std::chrono::high_resolution_clock::now();
 
             size_t actual_tokens = 0;
-            std::string result = manager_->generate(
-                prompt, static_cast<size_t>(max_tokens), &actual_tokens,
+            std::string result = manager_->generate_for_model(
+                current_model, prompt, static_cast<size_t>(max_tokens), &actual_tokens,
                 temperature, top_p, top_k > 0 ? top_k : 40, 1.1f
             );
 
@@ -2619,6 +2703,23 @@ void SnapLLMServer::handle_config_update(const httplib::Request& req, httplib::R
         if (!update_bool("cors_enabled", updated.cors_enabled)) return;
         if (!update_int("timeout_seconds", updated.timeout_seconds, 30, 86400)) return;
         if (!update_int("max_concurrent_requests", updated.max_concurrent_requests, 1, 128)) return;
+        if (updated.max_active_inferences > updated.max_concurrent_requests) {
+            send_error(res, "max_concurrent_requests cannot be lower than max_active_inferences", "invalid_request_error", 400);
+            return;
+        }
+        if (merged.contains("max_active_inferences")) {
+            if (!merged["max_active_inferences"].is_number_integer()) {
+                send_error(res, "Invalid type for 'max_active_inferences'", "invalid_request_error", 400);
+                return;
+            }
+            const int value = merged["max_active_inferences"].get<int>();
+            if (value < 1 || value > updated.max_concurrent_requests) {
+                send_error(res, "'max_active_inferences' must be between 1 and max_concurrent_requests", "invalid_request_error", 400);
+                return;
+            }
+            updated.max_active_inferences = value;
+            updated_fields.push_back("max_active_inferences");
+        }
         if (!update_int("max_models", updated.max_models, 1, 64)) return;
         if (!update_int("default_ram_budget_mb", updated.default_ram_budget_mb, 512, 1048576)) return;
         if (merged.contains("default_strategy")) {
@@ -2660,6 +2761,15 @@ void SnapLLMServer::handle_config_update(const httplib::Request& req, httplib::R
         if (!write_config_file(config_.config_path.empty() ? get_default_config_path() : config_.config_path, payload, error)) {
             send_error(res, "Failed to persist configuration: " + error, "server_error", 500);
             return;
+        }
+
+        if (updated.max_active_inferences != config_.max_active_inferences) {
+            config_.max_active_inferences = updated.max_active_inferences;
+            {
+                std::lock_guard<std::mutex> lock(inference_gate_mutex_);
+                max_active_inferences_ = updated.max_active_inferences;
+            }
+            if (auto bridge = manager_->get_bridge()) bridge->set_max_concurrent_inferences(updated.max_active_inferences);
         }
 
         json response = {
@@ -3416,6 +3526,13 @@ void SnapLLMServer::handle_server_metrics(const httplib::Request&, httplib::Resp
     // Calculate uptime
     auto now = std::chrono::steady_clock::now();
     auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_time_).count();
+    int active_inferences = 0;
+    int max_active_inferences = 0;
+    {
+        std::lock_guard<std::mutex> lock(inference_gate_mutex_);
+        active_inferences = active_inference_count_;
+        max_active_inferences = max_active_inferences_;
+    }
 
     // Get model metrics
     auto models = manager_->get_loaded_models();
@@ -3426,6 +3543,7 @@ void SnapLLMServer::handle_server_metrics(const httplib::Request&, httplib::Resp
         double avg_latency = 0.0;
         uint64_t requests = 0;
         uint64_t tokens = 0;
+        uint32_t in_flight = 0;
 
         {
             std::lock_guard<std::mutex> lock(model_metrics_mutex_);
@@ -3433,6 +3551,7 @@ void SnapLLMServer::handle_server_metrics(const httplib::Request&, httplib::Resp
             if (it != model_metrics_.end()) {
                 requests = it->second.requests;
                 tokens = it->second.tokens_generated;
+                in_flight = it->second.in_flight;
                 avg_latency = (requests > 0) ? (it->second.total_latency_ms / requests) : 0.0;
                 if (it->second.total_latency_ms > 0.0) {
                     tps = (tokens / (it->second.total_latency_ms / 1000.0));
@@ -3446,6 +3565,7 @@ void SnapLLMServer::handle_server_metrics(const httplib::Request&, httplib::Resp
             {"avg_latency_ms", avg_latency},
             {"requests", requests},
             {"tokens_generated", tokens}
+            ,{"in_flight", in_flight}
         });
     }
 
@@ -3455,6 +3575,12 @@ void SnapLLMServer::handle_server_metrics(const httplib::Request&, httplib::Resp
         {"total_tokens_generated", total_tokens_.load()},
         {"total_errors", total_errors_.load()},
         {"uptime_seconds", uptime},
+        {"scheduler", {
+            {"active_inferences", active_inferences},
+            {"max_active_inferences", max_active_inferences},
+            {"waiting_inferences", waiting_inference_count_.load(std::memory_order_relaxed)},
+            {"admission", "bounded_fifo_gate"}
+        }},
         {"models", models_array}
     };
 
@@ -3500,6 +3626,15 @@ void SnapLLMServer::handle_generate(const httplib::Request& req, httplib::Respon
             send_error(res, validation_error);
             return;
         }
+        RouteRequest scheduled_request;
+        scheduled_request.requested_model = model;
+        scheduled_request.modality = "text";
+        const auto scheduled_route = choose_scheduled_model(scheduled_request);
+        if (!scheduled_route.accepted) {
+            send_error(res, scheduled_route.error, "route_rejected", 422);
+            return;
+        }
+        model = scheduled_route.model;
         int max_tokens = 0;
         if (!read_bounded_integer(
                 body, "max_tokens", 512,
@@ -3520,26 +3655,26 @@ void SnapLLMServer::handle_generate(const httplib::Request& req, httplib::Respon
             return;
         }
 
-        // Switch model if needed - protected by mutex
-        if (!model.empty() && model != manager_->get_current_model()) {
-            std::lock_guard<std::mutex> switch_lock(model_switch_mutex_);
-            if (!manager_->switch_model(model)) {
-                send_error(res, "Model not loaded: " + model, "model_not_found", 404);
-                return;
-            }
-        }
-
-        std::string current_model = manager_->get_current_model();
+        // Resolve the request model without mutating process-wide selection.
+        std::string current_model = model.empty() ? manager_->get_current_model() : model;
+        model_request_started(current_model);
+        InferenceGateGuard model_metrics_guard(true, [this, current_model]() {
+            model_request_finished(current_model);
+        });
         if (current_model.empty()) {
             send_error(res, "No model loaded", "no_model", 400);
+            return;
+        }
+        if (!manager_->is_loaded(current_model)) {
+            send_error(res, "Model not loaded: " + current_model, "model_not_found", 404);
             return;
         }
 
         auto start_time = std::chrono::high_resolution_clock::now();
 
         size_t actual_tokens = 0;
-        std::string result = manager_->generate(
-            prompt, static_cast<size_t>(max_tokens), &actual_tokens,
+        std::string result = manager_->generate_for_model(
+            current_model, prompt, static_cast<size_t>(max_tokens), &actual_tokens,
             temperature, top_p, top_k, repeat_penalty
         );
 
@@ -3599,6 +3734,15 @@ void SnapLLMServer::handle_generate_batch(const httplib::Request& req, httplib::
             send_error(res, validation_error);
             return;
         }
+        RouteRequest scheduled_request;
+        scheduled_request.requested_model = model;
+        scheduled_request.modality = "text";
+        const auto scheduled_route = choose_scheduled_model(scheduled_request);
+        if (!scheduled_route.accepted) {
+            send_error(res, scheduled_route.error, "route_rejected", 422);
+            return;
+        }
+        model = scheduled_route.model;
         int default_max_tokens = 0;
         if (!read_bounded_integer(
                 body, "max_tokens", 512,
@@ -3728,26 +3872,26 @@ void SnapLLMServer::handle_generate_batch(const httplib::Request& req, httplib::
             return;
         }
 
-        // Switch model if needed - protected by mutex
-        if (!model.empty() && model != manager_->get_current_model()) {
-            std::lock_guard<std::mutex> switch_lock(model_switch_mutex_);
-            if (!manager_->switch_model(model)) {
-                send_error(res, "Model not loaded: " + model, "model_not_found", 404);
-                return;
-            }
-        }
-
-        std::string current_model = manager_->get_current_model();
+        // Resolve the request model without mutating process-wide selection.
+        std::string current_model = model.empty() ? manager_->get_current_model() : model;
+        model_request_started(current_model);
+        InferenceGateGuard model_metrics_guard(true, [this, current_model]() {
+            model_request_finished(current_model);
+        });
         if (current_model.empty()) {
             send_error(res, "No model loaded", "no_model", 400);
+            return;
+        }
+        if (!manager_->is_loaded(current_model)) {
+            send_error(res, "Model not loaded: " + current_model, "model_not_found", 404);
             return;
         }
 
         auto start_time = std::chrono::high_resolution_clock::now();
 
         // Use parallel batch processing
-        std::vector<snapllm::BatchResult> results = manager_->generate_batch(
-            items, default_temp, default_top_p, default_top_k, default_repeat);
+        std::vector<snapllm::BatchResult> results = manager_->generate_batch_for_model(
+            current_model, items, default_temp, default_top_p, default_top_k, default_repeat);
 
         auto end_time = std::chrono::high_resolution_clock::now();
         double total_time = std::chrono::duration<double>(end_time - start_time).count();

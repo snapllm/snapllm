@@ -8,7 +8,9 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1,
+      staleTime: 5000,
+      // A disconnected local daemon must not trigger retry storms.
+      retry: false,
     },
   },
 })

@@ -410,6 +410,7 @@ int main(int argc, char** argv) {
     bool cors_enabled = true;
     int timeout_seconds = 600;
     int max_concurrent_requests = 8;
+    int max_active_inferences = 1;
     std::string default_models_path;
     int max_models = 10;
     int default_ram_budget_mb = 16384;
@@ -463,6 +464,10 @@ int main(int argc, char** argv) {
         int config_max_concurrent = 0;
         if (try_get_int(persisted_config, "server", "max_concurrent_requests", config_max_concurrent) && config_max_concurrent >= 1 && config_max_concurrent <= 128) {
             max_concurrent_requests = config_max_concurrent;
+        }
+        int config_max_active = 0;
+        if (try_get_int(persisted_config, "server", "max_active_inferences", config_max_active) && config_max_active >= 1 && config_max_active <= max_concurrent_requests) {
+            max_active_inferences = config_max_active;
         }
         int config_max_models = 0;
         if (try_get_int(persisted_config, "runtime", "max_models", config_max_models) && config_max_models >= 1 && config_max_models <= 64) {
@@ -809,6 +814,7 @@ int main(int argc, char** argv) {
         config.cors_enabled = cors_enabled;
         config.timeout_seconds = timeout_seconds;
         config.max_concurrent_requests = max_concurrent_requests;
+        config.max_active_inferences = max_active_inferences;
         config.default_models_path = default_models_path;
         config.max_models = max_models;
         config.default_ram_budget_mb = default_ram_budget_mb;

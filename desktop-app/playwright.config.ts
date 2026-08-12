@@ -25,10 +25,20 @@ export default defineConfig({
       grep: /responsive/,
     },
   ],
-  webServer: {
-    command: 'npm run dev -- --host 127.0.0.1',
-    url: 'http://127.0.0.1:9780',
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      command: 'npm run dev -- --host 127.0.0.1',
+      url: 'http://127.0.0.1:9780',
+      // Never attach to a stale Vite process from a previous run. Reusing a
+      // process that exits midway makes later tests fail with ECONNREFUSED.
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    ...(process.env.SNAPLLM_E2E_API_COMMAND ? [{
+      command: process.env.SNAPLLM_E2E_API_COMMAND,
+      url: 'http://127.0.0.1:6930/health',
+      reuseExistingServer: true,
+      timeout: 120_000,
+    }] : []),
+  ],
 });

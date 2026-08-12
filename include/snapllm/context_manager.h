@@ -394,7 +394,7 @@ public:
      * @param config Query configuration
      * @return Number of tokens generated
      */
-    using TokenCallback = std::function<void(const std::string& token, int token_id, bool is_done)>;
+    using TokenCallback = std::function<bool(const std::string& token, int token_id, bool is_done)>;
     size_t query_streaming(
         const ContextHandle& handle,
         const std::string& query,

@@ -402,6 +402,9 @@ Request:
 }
 ```
 
+Chat completions stream by default. Set `"stream": false` when a buffered
+JSON response is required.
+
 Response:
 ```json
 {
@@ -638,6 +641,9 @@ https://github.com/user-attachments/assets/d6d964f9-0883-407d-bb8a-d935501dbb9d
 
 - [SnapLLM Desktop App Demo (Vimeo)](https://vimeo.com/1157629276?fl=ip&fe=ec)
 - [SnapLLM Server and API Demo (Vimeo)](https://vimeo.com/1157624031?fl=ip&fe=ec)
+- [How to Start the Local Server](video/How_To_Start_Server_Locally.mp4)
+- [Image Generation Demo](video/ImageGenerationDemo.mp4)
+- [Inference Demo](video/20260208_184422.mp4)
 
 ---
 
@@ -794,6 +800,7 @@ Options:
 | `SNAPLLM_CONFIG_PATH` | Server config file path | Platform default |
 | `SNAPLLM_API_KEY` | Runtime-only API key (required off loopback) | Unset |
 | `SNAPLLM_CORS_ORIGINS` | Comma-separated exact browser origins | Unset |
+| `SNAPLLM_MAX_ACTIVE_INFERENCES` | Optional concurrent inference slots; bounded by HTTP workers and defaults to 1 for GPU safety | `1` |
 
 ---
 

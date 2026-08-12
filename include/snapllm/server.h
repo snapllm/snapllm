@@ -41,6 +41,7 @@
 #pragma once
 
 #include "model_manager.h"
+#include "request_router.h"
 #include "context_manager.h"
 #include <string>
 #include <memory>
@@ -77,6 +78,7 @@ struct ServerConfig {
     size_t max_payload_bytes = 32 * 1024 * 1024; ///< Maximum HTTP request body (32 MiB)
     int timeout_seconds = 600;               ///< Request timeout
     int max_concurrent_requests = 8;         ///< HTTP worker count; inference is GPU-gated with bounded backpressure
+    int max_active_inferences = 1;           ///< Simultaneous inference slots; bounded by HTTP workers
     int max_models = 10;                     ///< UI default: max models allowed
     int default_ram_budget_mb = 16384;       ///< UI default RAM budget
     std::string default_strategy = "balanced"; ///< UI default strategy
@@ -172,6 +174,10 @@ private:
     std::condition_variable inference_gate_cv_;
     int active_inference_count_ = 0;
     int max_active_inferences_ = 1;  // Default: serialize all GPU inference
+    // Number of requests waiting for an inference slot. This is a bounded,
+    // request-scoped gauge (not an unbounded queue) and is exposed for
+    // backpressure/latency observability.
+    std::atomic<int> waiting_inference_count_{0};
     bool acquire_inference_gate(int timeout_ms = 30000);
     void release_inference_gate();
 
@@ -182,12 +188,17 @@ private:
         uint64_t requests = 0;
         uint64_t tokens_generated = 0;
         double total_latency_ms = 0.0;
+        uint32_t in_flight = 0;
     };
     std::unordered_map<std::string, ModelRuntimeMetrics> model_metrics_;
     std::mutex model_metrics_mutex_;
+    std::atomic<uint64_t> routing_cursor_{0};
 
     void record_model_metrics(const std::string& model_id, uint64_t tokens_generated,
                               double latency_ms, uint64_t request_count = 1);
+    void model_request_started(const std::string& model_id);
+    void model_request_finished(const std::string& model_id);
+    RouteDecision choose_scheduled_model(const RouteRequest& request);
 
     // Route setup
     void setup_routes();

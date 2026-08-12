@@ -509,7 +509,7 @@ bool VPIDBridge::load_model_with_vpid_tensors(
         manifest_file.close();
         std::cout << "  [Layer Tracking] ✓ Registration complete!" << std::endl;
     } else {
-        std::cerr << "  [Layer Tracking] ERROR: Failed to open manifest file: " << manifest_path << std::endl;
+        std::cout << "  [Layer Tracking] No manifest present; layer tracking is unavailable for this load mode" << std::endl;
     }
 
     std::cout << "  [Custom Loader] Model stored and ready for inference!" << std::endl;
@@ -523,6 +523,10 @@ bool VPIDBridge::load_and_dequantize_model(
     bool force_reload,
     const GPUConfig& gpu_config)
 {
+    if (reload_failure_for_test_.load(std::memory_order_relaxed)) {
+        std::cerr << "[GPU Recovery] Injected reload failure (test hook)" << std::endl;
+        return false;
+    }
     std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
     context_lifetimes_.wait_for_zero(model_name);
     if (gpu_config.vram_budget_mb > 0) {
@@ -801,8 +805,10 @@ bool VPIDBridge::load_and_dequantize_model(
 
         manifest_file.close();
         std::cout << "  [Layer Tracking] ✓ Registration complete!" << std::endl;
+    } else if (vdpe_manifest_exists) {
+        std::cerr << "  [Layer Tracking] ERROR: Manifest disappeared during model load: " << manifest_path << std::endl;
     } else {
-        std::cerr << "  [Layer Tracking] ERROR: Failed to open manifest file: " << manifest_path << std::endl;
+        std::cout << "  [Layer Tracking] No manifest present; layer tracking is unavailable for this load mode" << std::endl;
     }
 
     // Register model in DequantCache so inference can find it
@@ -2868,6 +2874,10 @@ size_t VPIDBridge::get_gpu_memory_total() const {
 }
 
 bool VPIDBridge::rebalance_gpu_memory() {
+    if (rebalance_failure_for_test_.load(std::memory_order_relaxed)) {
+        std::cerr << "[GPU Recovery] Injected rebalance failure (test hook)" << std::endl;
+        return false;
+    }
     std::lock_guard<std::mutex> lock(models_mutex_);
     if (configured_vram_budget_mb_ == 0) {
         return false; // Capacity is unknown; never evict speculatively.
@@ -2879,6 +2889,14 @@ bool VPIDBridge::rebalance_gpu_memory() {
         changed = true;
     }
     return changed || total_vram_used_ <= high_watermark;
+}
+
+void VPIDBridge::set_reload_failure_for_test(bool enabled) noexcept {
+    reload_failure_for_test_.store(enabled, std::memory_order_relaxed);
+}
+
+void VPIDBridge::set_rebalance_failure_for_test(bool enabled) noexcept {
+    rebalance_failure_for_test_.store(enabled, std::memory_order_relaxed);
 }
 
 } // namespace snapllm

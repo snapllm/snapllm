@@ -9,14 +9,22 @@
 #include <string>
 #include <memory>
 #include <vector>
+#include <unordered_map>
+#include <mutex>
+#include <cstdint>
 
 namespace snapllm {
 
 /**
  * @brief Prefetch Engine
  * 
- * Learns access patterns and prefetches data before needed.
- * Combines sequential and statistical prefetching for 85%+ hit rate.
+ * Learns access patterns and predicts likely next tensors.
+ *
+ * The current workspace API exposes lookup by tensor name, but does not
+ * expose the offset/size needed to load an uncached tensor. Consequently
+ * prefetch() only accounts for cache residency; it never claims to have
+ * loaded data that it could not load. Callers that own tensor metadata can
+ * use VPIDWorkspace::read_direct() to perform an actual load.
  */
 class PrefetchEngine {
 public:
@@ -39,8 +47,13 @@ public:
 private:
     std::shared_ptr<VPIDWorkspace> vpid_;
     
-    // Access history and patterns
-    // TODO: Implement pattern learning
+    // Access history and transition counts. All state is protected because
+    // inference requests may record accesses concurrently.
+    mutable std::mutex mutex_;
+    std::string last_access_;
+    std::unordered_map<std::string, std::unordered_map<std::string, uint64_t>> transitions_;
+    uint64_t cache_hits_ = 0;
+    uint64_t cache_misses_ = 0;
 };
 
 } // namespace snapllm

@@ -1,5 +1,82 @@
 # Changelog
 
+## Unreleased
+
+- Make OpenAI, Anthropic, single-generation, and batch requests resolve the
+  requested model without mutating the server-wide active-model selection.
+- Add `SNAPLLM_MAX_ACTIVE_INFERENCES` as a bounded opt-in for deployments with
+  sufficient VRAM; the safe serialized default remains unchanged.
+- Propagate cached-context streaming cancellation when an SSE client
+  disconnects, so inference gates are released promptly.
+- Add thread-safe prefetch transition learning, deterministic predictions, and
+  cache hit-rate accounting without claiming unsupported tensor loads.
+- Make `/v1/chat/completions` streaming by default; clients can preserve the
+  buffered response with `"stream": false`.
+- Add a Settings control for live-tunable simultaneous inference slots,
+  bounded by the configured HTTP worker count; the safe default remains 1.
+- Harden the throughput benchmark with health/scheduler preflight checks,
+  explicit CPU/GPU mode labels, and clear non-zero failure behavior when the
+  daemon or model is unavailable.
+- Fix release version-consistency validation for the Tauri 2 root-level
+  `version` field.
+- Add opt-in, hardware-independent GPU recovery failure hooks and regression
+  coverage so rebalance/reload failures are verified as fail-closed results.
+- Verify the rebuilt CPU-mode CLI through Playwright: model registry placement,
+  Chat UI inference, and CORS wiring now pass in one live test.
+- Align standalone Windows/Linux release packagers with CI: CPU is the default
+  archive mode, with `cpu|gpu` as the user-facing choice and `cuda` retained
+  as a compatibility alias.
+- Align Quickstart archive examples and GPU build guidance with the public
+  `cpu|gpu` packaging terminology.
+- Include the built web UI in standalone release packages and wire generated
+  start scripts to `--ui-dir ui`, matching CI-produced artifacts.
+- Align HTTP security integration with the API's structured validation contract:
+  malformed token limits may return 400 or 422, both fail closed before
+  inference.
+- Fix Windows standalone package launcher generation by moving model path/name
+  validation into a packaged PowerShell script; batch generation no longer
+  breaks on command metacharacters.
+- Complete Windows CPU/GPU package dry runs: both archives now include the
+  executable, UI, version file, launchers, and mode-correct CUDA DLL set.
+- Update the manual release workflow example to the current `v1.17.8` version
+  line so operators do not start a release from the retired `v1.3.1` example.
+- Update the HTTP security harness for structured Messages validation while
+  retaining strict authentication, origin, host, and public-bind assertions.
+- Add the model-switching benchmark as a CMake target and record resident,
+  warm-cache, and unresolved cold-load results in QA documentation.
+- Isolate cold-load lifecycle benchmarks from rapid-switch state and use
+  explicit CPU-only placement for deterministic recovery measurements.
+- Treat an absent vDPE manifest as an expected informational state when
+  manifest generation is disabled, instead of emitting a false error.
+- Migrate the desktop shell from Tauri 1 to Tauri 2.11.5 and regenerate the
+  Rust dependency lockfile, removing the obsolete rand 0.7 chain.
+- Complete the Tauri 2 frontend/runtime wiring: move the API package to runtime
+  dependencies, use plugin dialog/filesystem APIs, add scoped capabilities, and
+  align Linux CI with the libsoup3/WebKitGTK 4.1 backend.
+- Add `$HOME/Models` to the desktop filesystem capability for Linux/macOS model
+  discovery and split the Vite bundle into bounded cacheable chunks.
+- Lazy-load syntax highlighting so the large grammar bundle is fetched only
+  when a response contains a code block.
+- Allow Playwright live API tests to start an explicitly configured local
+  daemon through `SNAPLLM_E2E_API_COMMAND`; offline tests remain deterministic.
+- Align push CI with the Tauri 2 Linux dependency stack (`libsoup3`/WebKitGTK
+  4.1) so regular CI and release builds use the same native prerequisites.
+- Harden the Playwright loop against stale Vite processes and make live API
+  checks opt-in, preventing offline runs from spawning long-lived retry storms.
+- Remove the duplicate React Query provider and stop polling failed local API
+  queries until the daemon reconnects, preventing offline retry storms.
+- Apply the same stop-on-error polling policy to page-level metrics, models,
+  contexts, chat, vision, comparison, batch, and playground queries.
+- Add the first bounded scheduler slice: least-loaded compatible model routing
+  with latency/tie rotation, per-model in-flight gauges, waiting admission
+  metrics, and Metrics UI visibility. Explicit model requests remain pinned.
+- Apply the same load-aware scheduler to Anthropic Messages, text generation,
+  and batch generation endpoints.
+- Run and record live low-weight concurrent benchmarks: 16/16 requests
+  completed at client concurrency 4, 8, and 16 with bounded admission.
+- Add benchmark preflight and explicit CPU/GPU run labels so utilization and
+  scheduler settings cannot be confused between runs.
+
 ## [1.17.8] - 2026-07-25
 
 - Fix the Tauri resource-directory API call so the desktop Rust check compiles.

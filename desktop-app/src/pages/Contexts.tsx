@@ -129,19 +129,19 @@ export default function Contexts() {
   const { data: modelsData } = useQuery({
     queryKey: ['models'],
     queryFn: () => listModels(),
-    refetchInterval: 10000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 10000,
   });
 
   const { data: contextList, isLoading: contextsLoading, refetch: refetchContexts } = useQuery({
     queryKey: ['contexts', filterTier, filterModel],
     queryFn: () => listContexts(filterTier || undefined, filterModel || undefined),
-    refetchInterval: 5000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
   });
 
   const { data: contextStats, refetch: refetchStats } = useQuery({
     queryKey: ['contextStats'],
     queryFn: getContextStats,
-    refetchInterval: 5000,
+    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
   });
 
   const loadedModels = modelsData?.models?.filter((model) => model.status === 'loaded' || !model.status) || [];
