@@ -1,0 +1,66 @@
+name: Release GPU artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to extend (for example v1.17.9)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.tag }}
+
+jobs:
+  build-windows-gpu:
+    # Requires a registered self-hosted Windows runner with CUDA toolkit/driver.
+    runs-on: [self-hosted, windows, gpu, cuda]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 1
+      - name: Build CUDA binary
+        shell: pwsh
+        run: |
+          cmake -S . -B build_gpu -G "Visual Studio 17 2022" -A x64 -DSNAPLLM_CUDA=ON -DSNAPLLM_AVX2=ON -DSNAPLLM_OPENMP=ON -DSNAPLLM_ENABLE_DIFFUSION=ON -DSNAPLLM_ENABLE_MULTIMODAL=ON
+          cmake --build build_gpu --config Release --parallel 1
+      - name: Build Web UI
+        shell: pwsh
+        run: |
+          npm --prefix desktop-app ci --ignore-scripts
+          npm --prefix desktop-app run build
+      - name: Package GPU release
+        shell: cmd
+        run: package_release.bat %RELEASE_TAG:~1% gpu
+      - name: Upload Windows GPU asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $asset = Get-ChildItem "releases\snapllm-$($env:RELEASE_TAG.TrimStart('v'))-windows-x64-gpu.zip"
+          gh release upload $env:RELEASE_TAG $asset.FullName --repo $env:GITHUB_REPOSITORY --clobber
+
+  build-linux-gpu:
+    # Requires a registered self-hosted Linux runner with CUDA toolkit/driver.
+    runs-on: [self-hosted, linux, gpu, cuda]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 1
+      - name: Build CUDA binary
+        run: |
+          cmake -S . -B build_gpu -DSNAPLLM_CUDA=ON -DSNAPLLM_AVX2=ON -DSNAPLLM_OPENMP=ON -DSNAPLLM_ENABLE_DIFFUSION=ON -DSNAPLLM_ENABLE_MULTIMODAL=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build_gpu --parallel 1
+      - name: Build Web UI
+        run: npm --prefix desktop-app ci --ignore-scripts && npm --prefix desktop-app run build
+      - name: Package GPU release
+        run: ./package_release.sh "${RELEASE_TAG#v}" gpu
+      - name: Upload Linux GPU asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" "releases/snapllm-${RELEASE_TAG#v}-linux-x64-gpu.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
