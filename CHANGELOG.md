@@ -190,6 +190,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Release preparation
+
+- Bump the canonical release version to 1.17.9 after the 03881fb CI and CodeQL gates passed.
+
 ## [1.3.7] - 2026-07-23
 
 ### Fixed
