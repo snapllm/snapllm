@@ -74,3 +74,15 @@ jobs:
             SNAPLLM_CUDA=OFF
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Build and push CUDA image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.cuda
+          push: true
+          build-args: SNAPLLM_VERSION=${{ steps.release.outputs.version }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}-cuda
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda
+          labels: ${{ steps.meta.outputs.labels }}

@@ -200,8 +200,9 @@ Tagged releases publish a CPU image to Docker Hub as
 `docker-publish` GitHub environment. Configure repository secrets
 `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`, then create a release tag. The
 published image listens on `0.0.0.0:6930` inside the container and includes a
-health check for `/health`. GPU images require a separate CUDA runtime image
-and NVIDIA Container Toolkit; the default published image is CPU-only.
+health check for `/health`. The `-cuda` image uses the NVIDIA CUDA 12.6 runtime
+and requires NVIDIA Container Toolkit plus `--gpus all`; the unqualified image
+is CPU-only.
 
 The container runs as an unprivileged user with a read-only root filesystem,
 dropped Linux capabilities, a read-only model mount, and a writable workspace

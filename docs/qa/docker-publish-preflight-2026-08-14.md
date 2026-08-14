@@ -9,9 +9,10 @@ Local validation:
 
 - `node scripts/check_versions.mjs` — passed (`1.17.13`)
 - PyYAML parsing of workflow and Compose files — passed
-- `docker build` — not runnable here because Docker Desktop's Linux engine is
-  unavailable (`dockerDesktopLinuxEngine` named pipe missing).
+- CPU `docker build` — passed after starting Docker Desktop; the image reached
+  a healthy container state on the mapped test port.
+- CUDA base-image/GPU passthrough probe — not completed within the local pull
+  window; `nvidia/cuda:12.6.3` must be pulled and tested with `--gpus all`.
 
-The default image is CPU-only. CUDA publishing needs a separate CUDA base
-image and NVIDIA Container Toolkit validation; it is intentionally not claimed
-by this workflow.
+The default image is CPU-only. The CUDA workflow image is built from the
+NVIDIA CUDA 12.6 devel/runtime images and is tagged with `-cuda`/`cuda`.

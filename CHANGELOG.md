@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a CUDA 12.6 Docker image and publish both CPU and CUDA variants through
+  the protected Docker Hub release workflow.
+
 - Add a tag-triggered, credential-gated Docker Hub publisher with versioned
   CPU images, OCI metadata, and a container health check.
 
