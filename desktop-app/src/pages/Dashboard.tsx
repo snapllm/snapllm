@@ -70,6 +70,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHealth, useModels, useServerStatus, useCacheStats, useContextStats, useContextList } from '../hooks/useApi';
 import { handleApiError, getApiBaseUrl, getMetrics } from '../lib/api';
+import { ensureDaemonRunning } from '../lib/daemon';
 
 // ============================================================================
 // Types & Interfaces
@@ -593,7 +594,10 @@ export default function Dashboard() {
                   </code>
                 </div>
                 <button
-                  onClick={() => refetchHealth()}
+                  onClick={async () => {
+                    await ensureDaemonRunning();
+                    await refetchHealth();
+                  }}
                   className="px-3 py-1.5 text-sm font-medium text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/50 rounded-lg hover:bg-red-200 dark:hover:bg-red-900 transition-colors"
                 >
                   Retry
