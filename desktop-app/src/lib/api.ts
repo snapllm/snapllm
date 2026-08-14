@@ -593,7 +593,7 @@ export class StreamingClient {
         ...getRuntimeHeaders(),
       },
       body: JSON.stringify({
-        model: request.model || 'default',
+        ...(request.model ? { model: request.model } : {}),
         messages,
         max_tokens: request.max_tokens || 512,
         stream: true,
@@ -603,7 +603,16 @@ export class StreamingClient {
     })
       .then(async (response) => {
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          let detail = '';
+          try {
+            const payload = await response.clone().json() as { error?: { message?: string } | string; message?: string };
+            detail = typeof payload.error === 'string'
+              ? payload.error
+              : payload.error?.message || payload.message || '';
+          } catch {
+            // Some proxies return an empty body for validation failures.
+          }
+          throw new Error(`HTTP ${response.status}: ${detail || response.statusText}`);
         }
 
         const reader = response.body?.getReader();
