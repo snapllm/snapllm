@@ -590,7 +590,7 @@ export default function Dashboard() {
                     The local API is unavailable at {apiBaseUrl}. SnapLLM Desktop starts the daemon automatically when its CLI is installed.
                   </p>
                   <code className="block mt-2 text-xs bg-red-100 dark:bg-red-900/50 p-2 rounded-lg text-red-700 dark:text-red-300">
-                    snapllm --daemon --host 127.0.0.1 --port 6930
+                    snapllm --daemon --host 127.0.0.1 --port 6930 --cors-origin http://127.0.0.1:9780 --cors-origin http://localhost:9780
                   </code>
                 </div>
                 <button

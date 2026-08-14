@@ -95,7 +95,7 @@ echo @echo off
 echo echo Starting SnapLLM Server...
 echo echo.
 echo cd /d "%%~dp0"
-echo bin\snapllm.exe --server --port 6930 --ui-dir ui %%*
+echo bin\snapllm.exe --server --port 6930 --ui-dir ui --cors-origin http://127.0.0.1:9780 --cors-origin http://localhost:9780 %%*
 echo pause
 ) > "%RELEASE_DIR%\run_server.bat"
 

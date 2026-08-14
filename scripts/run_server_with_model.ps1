@@ -18,7 +18,9 @@ $binary = Join-Path $PSScriptRoot 'bin\snapllm.exe'
 if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
     throw "SnapLLM binary not found: $binary"
 }
-& $binary --server --port 6930 --ui-dir (Join-Path $PSScriptRoot 'ui') --load-model $modelName $modelPath
+& $binary --server --port 6930 --ui-dir (Join-Path $PSScriptRoot 'ui') `
+  --cors-origin 'http://127.0.0.1:9780' --cors-origin 'http://localhost:9780' `
+  --load-model $modelName $modelPath
 if ($LASTEXITCODE -ne 0) {
     throw "SnapLLM exited with code $LASTEXITCODE"
 }

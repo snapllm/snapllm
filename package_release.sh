@@ -97,7 +97,8 @@ cat > "${RELEASE_DIR}/run_server.sh" << 'EOF'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${LD_LIBRARY_PATH}"
 echo "Starting SnapLLM Server..."
-exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --ui-dir "${SCRIPT_DIR}/ui" "$@"
+exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --ui-dir "${SCRIPT_DIR}/ui" \
+  --cors-origin "http://127.0.0.1:9780" --cors-origin "http://localhost:9780" "$@"
 EOF
 chmod +x "${RELEASE_DIR}/run_server.sh"
 
@@ -115,7 +116,9 @@ read -p "Enter path to your .gguf model file: " MODEL_PATH
 read -p "Enter a name for this model: " MODEL_NAME
 echo ""
 echo "Starting server with model: ${MODEL_NAME}"
-exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --ui-dir "${SCRIPT_DIR}/ui" --load-model "${MODEL_NAME}" "${MODEL_PATH}"
+exec "${SCRIPT_DIR}/bin/snapllm" --server --port 6930 --ui-dir "${SCRIPT_DIR}/ui" \
+  --cors-origin "http://127.0.0.1:9780" --cors-origin "http://localhost:9780" \
+  --load-model "${MODEL_NAME}" "${MODEL_PATH}"
 EOF
 chmod +x "${RELEASE_DIR}/run_server_with_model.sh"
 
