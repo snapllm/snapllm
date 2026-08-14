@@ -330,6 +330,25 @@ export default function Chat() {
 
   const loadedModels = modelsResponse?.models?.filter((m: any) => m.status === 'loaded') || [];
 
+  // A model can be unloaded or switched by another page/process while a chat
+  // tab remains open. Never send a stale model id: the server correctly
+  // rejects explicit routes for models that are no longer loaded (422).
+  useEffect(() => {
+    const loadedIds = new Set(loadedModels.map((model: any) => model.id));
+    if (loadedIds.size === 0) {
+      if (selectedModel) setSelectedModel('');
+      if (activeModelId) setActiveModel('');
+      return;
+    }
+    if (!loadedIds.has(selectedModel)) {
+      const nextModel = activeModelId && loadedIds.has(activeModelId)
+        ? activeModelId
+        : loadedModels[0].id;
+      setSelectedModel(nextModel);
+      setActiveModel(nextModel);
+    }
+  }, [loadedModels, selectedModel, activeModelId, setActiveModel]);
+
   // Chat mutation
   const chatMutation = useMutation({
     mutationFn: sendChatMessage,
