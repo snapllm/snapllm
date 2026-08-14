@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
+        SNAPLLM_VERSION: "1.17.13"
         SNAPLLM_CUDA: "OFF"
         SNAPLLM_ENABLE_DIFFUSION: "ON"
         SNAPLLM_ENABLE_MULTIMODAL: "ON"

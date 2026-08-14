@@ -27,10 +27,17 @@ RUN cmake --build build --config Release --target snapllm_cli -j$(nproc)
 
 FROM ubuntu:22.04 AS runtime
 
+ARG SNAPLLM_VERSION=dev
+LABEL org.opencontainers.image.title="SnapLLM" \
+      org.opencontainers.image.description="Local multi-model inference API" \
+      org.opencontainers.image.version="${SNAPLLM_VERSION}" \
+      org.opencontainers.image.source="https://github.com/snapllm/snapllm"
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 ENV SNAPLLM_MODELS_PATH=/models
@@ -48,4 +55,7 @@ USER snapllm:snapllm
 
 EXPOSE 6930
 
-CMD ["snapllm", "--server", "--host", "127.0.0.1", "--port", "6930", "--workspace-root", "/workspace"]
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
+  CMD ["/bin/sh", "-c", "wget -qO- http://127.0.0.1:6930/health >/dev/null || exit 1"]
+
+CMD ["snapllm", "--server", "--host", "0.0.0.0", "--port", "6930", "--workspace-root", "/workspace"]

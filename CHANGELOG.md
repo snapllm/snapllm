@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a tag-triggered, credential-gated Docker Hub publisher with versioned
+  CPU images, OCI metadata, and a container health check.
+
 - Correct the development offline banner to show the daemon endpoint on port
   6930 instead of the Vite UI proxy port 9780.
 
