@@ -17,6 +17,7 @@ import {
   updateConfig,
 } from './api';
 import { resolveLoadedModelId } from './modelRouting';
+import { DAEMON_HEALTH_POLL_INTERVAL_MS, getServerConnectionState } from '../hooks/useApi';
 
 const originalAdapter = api.defaults.adapter;
 
@@ -43,6 +44,22 @@ afterEach(() => {
 });
 
 describe('desktop API contracts', () => {
+  it('keeps reconnect probes active after a daemon outage', () => {
+    expect(DAEMON_HEALTH_POLL_INTERVAL_MS).toBe(5000);
+    expect(getServerConnectionState({ isError: true, isLoading: false, isFetching: false })).toMatchObject({
+      isConnected: false,
+      isChecking: false,
+    });
+    expect(getServerConnectionState({ isError: true, isLoading: false, isFetching: true })).toMatchObject({
+      isConnected: false,
+      isChecking: true,
+    });
+    expect(getServerConnectionState({ health: { status: 'ok' } as any, isError: false, isLoading: false, isFetching: false })).toMatchObject({
+      isConnected: true,
+      isChecking: false,
+    });
+  });
+
   it('never routes chat to an unloaded model id', () => {
     expect(resolveLoadedModelId('stale', [{ id: 'resident' }])).toBe('resident');
     expect(resolveLoadedModelId('stale', [{ id: 'one' }, { id: 'two' }])).toBe('');

@@ -69,7 +69,7 @@ import {
 } from 'recharts';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHealth, useModels, useServerStatus, useCacheStats, useContextStats, useContextList } from '../hooks/useApi';
-import { handleApiError, getApiBaseUrl, getMetrics } from '../lib/api';
+import { handleApiError, getApiBaseUrl, getMetrics, isTauriAvailable } from '../lib/api';
 import { ensureDaemonRunning } from '../lib/daemon';
 
 // ============================================================================
@@ -236,6 +236,7 @@ export default function Dashboard() {
   const [lastMetricsUpdate, setLastMetricsUpdate] = useState<number>(0);
   const [showSettings, setShowSettings] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRetryingDaemon, setIsRetryingDaemon] = useState(false);
 
   // API Hooks
   const { data: health, isLoading: healthLoading, error: healthError, refetch: refetchHealth } = useHealth();
@@ -587,7 +588,9 @@ export default function Dashboard() {
                 <div className="flex-1">
                   <h4 className="font-medium text-red-800 dark:text-red-200">SnapLLM daemon is offline</h4>
                   <p className="text-sm text-red-600 dark:text-red-300 mt-1">
-                    The local API is unavailable at {apiBaseUrl}. SnapLLM Desktop starts the daemon automatically when its CLI is installed.
+                    The local API is unavailable at {apiBaseUrl}. {isTauriAvailable()
+                      ? 'SnapLLM Desktop will start the daemon when its CLI is installed.'
+                      : 'A browser cannot start local processes; keep the SnapLLM daemon running and retry.'}
                   </p>
                   <code className="block mt-2 text-xs bg-red-100 dark:bg-red-900/50 p-2 rounded-lg text-red-700 dark:text-red-300">
                     snapllm --daemon --host 127.0.0.1 --port 6930 --cors-origin http://127.0.0.1:9780 --cors-origin http://localhost:9780
@@ -595,12 +598,18 @@ export default function Dashboard() {
                 </div>
                 <button
                   onClick={async () => {
-                    await ensureDaemonRunning();
-                    await refetchHealth();
+                    setIsRetryingDaemon(true);
+                    try {
+                      await ensureDaemonRunning();
+                      await Promise.all([refetchHealth(), refetchModels()]);
+                    } finally {
+                      setIsRetryingDaemon(false);
+                    }
                   }}
-                  className="px-3 py-1.5 text-sm font-medium text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/50 rounded-lg hover:bg-red-200 dark:hover:bg-red-900 transition-colors"
+                  disabled={isRetryingDaemon}
+                  className="px-3 py-1.5 text-sm font-medium text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/50 rounded-lg hover:bg-red-200 dark:hover:bg-red-900 transition-colors disabled:opacity-60"
                 >
-                  Retry
+                  {isRetryingDaemon ? 'Checking...' : 'Retry'}
                 </button>
               </div>
             </div>

@@ -60,6 +60,19 @@ export const queryKeys = {
   contextStats: () => [...queryKeys.contexts, 'stats'] as const,
 };
 
+export const DAEMON_HEALTH_POLL_INTERVAL_MS = 5000;
+
+export const getServerConnectionState = (input: {
+  health?: HealthResponse;
+  isError: boolean;
+  isLoading: boolean;
+  isFetching: boolean;
+}) => ({
+  isConnected: !input.isError && input.health?.status === 'ok',
+  isChecking: input.isLoading || input.isFetching,
+  serverInfo: input.health,
+});
+
 // ============================================================================
 // Health Check Hook
 // ============================================================================
@@ -68,7 +81,10 @@ export const useHealth = (options?: UseQueryOptions<HealthResponse, Error>) => {
   return useQuery<HealthResponse, Error>({
     queryKey: queryKeys.health,
     queryFn: getHealth,
-    refetchInterval: (query) => query.state.status === 'error' ? false : 10000,
+    // Keep probing a stopped daemon.  A local process can be restarted after
+    // the first request fails; disabling polling on error left browser users
+    // permanently disconnected until they refreshed the whole UI.
+    refetchInterval: DAEMON_HEALTH_POLL_INTERVAL_MS,
     retry: false,
     ...options,
   });
@@ -82,7 +98,8 @@ export const useModels = (options?: UseQueryOptions<ModelListResponse, Error>) =
   return useQuery<ModelListResponse, Error>({
     queryKey: queryKeys.modelList(),
     queryFn: () => listModels(),
-    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
+    // Reconcile model state automatically when the daemon comes back.
+    refetchInterval: DAEMON_HEALTH_POLL_INTERVAL_MS,
     ...options,
   });
 };
@@ -160,13 +177,11 @@ export const useGenerateBatch = (
  * Hook to check if API server is connected
  */
 export const useServerStatus = () => {
-  const { data: health, isError, isLoading } = useHealth();
+  const { data: health, isError, isLoading, isFetching } = useHealth();
 
-  return {
-    isConnected: !isError && health?.status === 'ok',
-    isChecking: isLoading,
-    serverInfo: health,
-  };
+  // isLoading is only true for the first request. During reconnect probes,
+  // isFetching keeps the UI truthful instead of flashing disconnected.
+  return getServerConnectionState({ health, isError, isLoading, isFetching });
 };
 
 /**
