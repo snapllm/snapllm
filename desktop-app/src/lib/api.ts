@@ -802,6 +802,8 @@ export interface ScannedModel {
   quantization: string;
 }
 
+const normalizeModelPath = (value: string): string => value.replace(/\\/g, '/');
+
 export const scanFolder = async (folderPath: string): Promise<string[]> => {
   console.log('[scanFolder] Scanning folder:', folderPath);
 
@@ -813,7 +815,9 @@ export const scanFolder = async (folderPath: string): Promise<string[]> => {
 
     if (data.models && Array.isArray(data.models)) {
       // Return file paths (for backwards compatibility)
-      const paths = data.models.map((m: ScannedModel) => m.path);
+      const paths = data.models
+        .map((m: ScannedModel) => normalizeModelPath(m.path))
+        .filter(Boolean);
       console.log('[scanFolder] Found models:', paths.length);
       return paths;
     }
@@ -835,7 +839,7 @@ export const scanFolder = async (folderPath: string): Promise<string[]> => {
       // Filter for .gguf files and return full paths
       const ggufFiles = entries
         .filter(entry => entry.name?.endsWith('.gguf'))
-        .map(entry => `${folderPath}/${entry.name}`);
+        .map(entry => normalizeModelPath(`${folderPath}/${entry.name}`));
 
       console.log('[scanFolder] Tauri found:', ggufFiles.length, 'models');
       return ggufFiles;

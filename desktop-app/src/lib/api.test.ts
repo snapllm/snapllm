@@ -11,6 +11,7 @@ import {
   getRuntimeApiKeyValidationError,
   handleApiError,
   resolveApiBaseUrl,
+  scanFolder,
   scanModelsFolder,
   setRuntimeApiKey,
   updateConfig,
@@ -121,6 +122,24 @@ describe('desktop API contracts', () => {
     });
 
     expect(getRequest()?.url).toBe('/config');
+  });
+
+  it('normalizes Windows model paths returned by folder scans', async () => {
+    api.defaults.adapter = async (config): Promise<AxiosResponse> => ({
+      data: {
+        status: 'success',
+        models: [{ path: 'D:\\Models\\tinyllama.Q4_K_M.gguf' }],
+        count: 1,
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    });
+
+    await expect(scanFolder('D:\\Models')).resolves.toEqual([
+      'D:/Models/tinyllama.Q4_K_M.gguf',
+    ]);
   });
 
   it('sends the runtime API key as a Bearer header without putting it in the URL', async () => {
