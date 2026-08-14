@@ -9,18 +9,38 @@ export const daemonCommand = async (action: DaemonAction): Promise<string> => {
   return invoke<string>(command);
 };
 
+const daemonHealthUrl = 'http://127.0.0.1:6930/health';
+
+const daemonHealthy = async (): Promise<boolean> => {
+  try {
+    const response = await fetch(daemonHealthUrl, { cache: 'no-store' });
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
 export const ensureDaemonRunning = async (): Promise<boolean> => {
   if (!isTauriAvailable()) return false;
   try {
     const status = await daemonCommand('status');
-    if (/running/i.test(status)) return true;
+    if (/running/i.test(status) && await daemonHealthy()) {
+      // Attach the Tauri supervisor to a daemon started by the CLI/login task.
+      // daemon_start is idempotent when the port is already healthy.
+      await daemonCommand('start');
+      return true;
+    }
+    // A stale PID or wedged process must not block recovery. The native stop
+    // command removes stale state and is safe to ignore when already stopped.
+    if (/running/i.test(status)) {
+      try { await daemonCommand('stop'); } catch { /* continue with restart */ }
+    }
     await daemonCommand('start');
     // Starting the child is asynchronous. Wait for the HTTP listener before
     // allowing the UI queries to conclude that the daemon is offline.
     for (let attempt = 0; attempt < 20; attempt += 1) {
       try {
-        const response = await fetch('http://127.0.0.1:6930/health', { cache: 'no-store' });
-        if (response.ok) return true;
+        if (await daemonHealthy()) return true;
       } catch {
         // The child may still be binding its socket.
       }

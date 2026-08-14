@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add bounded Desktop daemon supervision and restart-on-failure login-task
+  settings so the local API recovers from unexpected process exits.
+
 - Prevent Chat from posting stale model ids after a model unload or switch;
   the send controls now follow the latest loaded-model snapshot.
 
