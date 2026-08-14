@@ -13,6 +13,7 @@ const DAEMON_ADDR: SocketAddr =
 const SUPERVISOR_POLL: Duration = Duration::from_secs(2);
 const SUPERVISOR_FAILURE_LIMIT: u8 = 3;
 const SUPERVISOR_RESTART_LIMIT: u8 = 5;
+const SUPERVISOR_STABLE_TICKS: u8 = 30;
 
 static SUPERVISOR_RUNNING: OnceLock<AtomicBool> = OnceLock::new();
 static SUPERVISOR_STOP: AtomicBool = AtomicBool::new(false);
@@ -118,6 +119,7 @@ fn start_daemon_supervisor(app: tauri::AppHandle) {
         });
         let mut failures = 0u8;
         let mut restarts = 0u8;
+        let mut stable_ticks = 0u8;
         loop {
             if SUPERVISOR_STOP.load(Ordering::Acquire) {
                 break;
@@ -125,8 +127,15 @@ fn start_daemon_supervisor(app: tauri::AppHandle) {
             std::thread::sleep(SUPERVISOR_POLL);
             if daemon_port_is_open() {
                 failures = 0;
+                stable_ticks = stable_ticks.saturating_add(1);
+                if stable_ticks >= SUPERVISOR_STABLE_TICKS {
+                    // A stable minute earns a fresh bounded restart budget.
+                    restarts = 0;
+                    stable_ticks = 0;
+                }
                 continue;
             }
+            stable_ticks = 0;
             failures = failures.saturating_add(1);
             if failures < SUPERVISOR_FAILURE_LIMIT || restarts >= SUPERVISOR_RESTART_LIMIT {
                 continue;

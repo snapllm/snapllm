@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Correct the development offline banner to show the daemon endpoint on port
+  6930 instead of the Vite UI proxy port 9780.
+
 - Add bounded Desktop daemon supervision and restart-on-failure login-task
   settings so the local API recovers from unexpected process exits.
 

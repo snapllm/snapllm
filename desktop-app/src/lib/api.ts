@@ -31,6 +31,13 @@ const API_BASE_URL = resolveApiBaseUrl(
 );
 const API_TRANSPORT_BASE_URL =
   import.meta.env.DEV && !import.meta.env.VITE_API_URL ? '' : API_BASE_URL;
+// In Vite development the browser talks to the UI origin, but the proxy
+// forwards to the daemon. Show the actual daemon address in diagnostics so an
+// offline banner never points users at the frontend port.
+const API_DISPLAY_URL =
+  import.meta.env.DEV && !import.meta.env.VITE_API_URL
+    ? 'http://127.0.0.1:6930'
+    : API_BASE_URL;
 const API_V1 = `${API_TRANSPORT_BASE_URL}/api/v1`;
 let runtimeApiKey = '';
 const MIN_API_KEY_LENGTH = 32;
@@ -1440,7 +1447,7 @@ export interface ConfigUpdateResponse {
   config_path?: string;
 }
 
-export const getApiBaseUrl = (): string => API_BASE_URL;
+export const getApiBaseUrl = (): string => API_DISPLAY_URL;
 export const getApiTransportBaseUrl = (): string => API_TRANSPORT_BASE_URL;
 export const getApiVersion = (): string => 'v1';
 
