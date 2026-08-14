@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Prevent Chat from posting stale model ids after a model unload or switch;
+  the send controls now follow the latest loaded-model snapshot.
+
 - Make OpenAI, Anthropic, single-generation, and batch requests resolve the
   requested model without mutating the server-wide active-model selection.
 - Add `SNAPLLM_MAX_ACTIVE_INFERENCES` as a bounded opt-in for deployments with

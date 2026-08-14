@@ -58,6 +58,7 @@ import {
   Radio,
 } from 'lucide-react';
 import { listLLMModels, sendChatMessage, StreamingClient, StreamToken } from '../lib/api';
+import { resolveLoadedModelId } from '../lib/modelRouting';
 import { filterChainOfThought, extractChainOfThought, hasChainOfThought } from '../utils/chainOfThought';
 import { useModelStore, useChatStore, useAppStore } from '../store';
 import { Button, IconButton, Badge, Avatar, Card, Tooltip, Toggle, Slider, Textarea } from '../components/ui';
@@ -329,6 +330,10 @@ export default function Chat() {
   });
 
   const loadedModels = modelsResponse?.models?.filter((m: any) => m.status === 'loaded') || [];
+  // Snapshot the server-authoritative loaded ids. A conversation can outlive a
+  // model unload/switch performed in another tab, so never route a request with
+  // an id that is absent from the latest snapshot.
+  const requestModelId = resolveLoadedModelId(selectedModel, loadedModels);
 
   // A model can be unloaded or switched by another page/process while a chat
   // tab remains open. Never send a stale model id: the server correctly
@@ -464,7 +469,7 @@ export default function Chat() {
 
   // Handle send
   const handleSend = useCallback(() => {
-    if (!input.trim() || !selectedModel) return;
+    if (!input.trim() || !requestModelId) return;
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -482,7 +487,7 @@ export default function Chat() {
         id: newConvId,
         title,
         messages: [userMessage],
-        modelId: selectedModel,
+        modelId: requestModelId,
         createdAt: new Date(),
         updatedAt: new Date(),
         starred: false,
@@ -581,11 +586,11 @@ export default function Chat() {
       setStreamingMetrics({ startTime: streamStartTime, tokenCount: 0, tokensPerSecond: 0 });
 
       // Capture model at start (won't change during stream)
-      const streamModelId = selectedModel;
+      const streamModelId = requestModelId;
       const filterCoT = settings.filter_chain_of_thought;
 
       // Build prompt based on model type - each model family has its own chat template
-      const modelLower = selectedModel.toLowerCase();
+      const modelLower = requestModelId.toLowerCase();
       const isonContext = buildISONContext(chatMessages);
       const currentMessage = chatMessages[chatMessages.length - 1];
       const userMsg = currentMessage.content;
@@ -683,7 +688,7 @@ export default function Chat() {
         {
           messages: streamMessages,  // Send full history for vPID L2 context caching
           max_tokens: settings.max_tokens,
-          model: selectedModel,
+          model: requestModelId,
           use_context_cache: settings.use_context_cache,
         },
         (token: StreamToken) => {
@@ -800,7 +805,7 @@ export default function Chat() {
         : chatMessages;
 
       chatMutation.mutate({
-        model: selectedModel,
+        model: requestModelId,
         messages: apiMessages,
         max_tokens: settings.max_tokens,
         temperature: settings.temperature,
@@ -820,7 +825,7 @@ export default function Chat() {
         }),
       });
     }
-  }, [input, selectedModel, messages, settings, chatMutation, streamingClient]);
+  }, [input, requestModelId, messages, settings, chatMutation, streamingClient]);
 
   // Handle key press
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -1298,8 +1303,8 @@ export default function Chat() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder={selectedModel ? 'Type your message... (Shift+Enter for new line)' : 'Select a model to start chatting'}
-                disabled={!selectedModel || chatMutation.isPending}
+                placeholder={requestModelId ? 'Type your message... (Shift+Enter for new line)' : 'Select a loaded model to start chatting'}
+                disabled={!requestModelId || chatMutation.isPending}
                 rows={1}
                 className="w-full resize-none rounded-2xl border border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800 px-4 py-3 pr-24 text-[15px] placeholder:text-surface-400 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ minHeight: '52px', maxHeight: '200px' }}
@@ -1310,7 +1315,7 @@ export default function Chat() {
                   variant="primary"
                   size="sm"
                   onClick={handleSend}
-                  disabled={!input.trim() || !selectedModel || chatMutation.isPending}
+                  disabled={!input.trim() || !requestModelId || chatMutation.isPending}
                   className="rounded-xl"
                 >
                   {chatMutation.isPending ? (

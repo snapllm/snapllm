@@ -16,6 +16,7 @@ import {
   setRuntimeApiKey,
   updateConfig,
 } from './api';
+import { resolveLoadedModelId } from './modelRouting';
 
 const originalAdapter = api.defaults.adapter;
 
@@ -42,6 +43,11 @@ afterEach(() => {
 });
 
 describe('desktop API contracts', () => {
+  it('never routes chat to an unloaded model id', () => {
+    expect(resolveLoadedModelId('stale', [{ id: 'resident' }])).toBe('resident');
+    expect(resolveLoadedModelId('stale', [{ id: 'one' }, { id: 'two' }])).toBe('');
+    expect(resolveLoadedModelId('resident', [{ id: 'resident' }])).toBe('resident');
+  });
   const validApiKey = 'k'.repeat(32);
 
   it('enforces the server API key policy before storing a key', () => {
