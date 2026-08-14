@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Normalize Docker Hub usernames before constructing image references so
+  whitespace or uppercase account input cannot produce invalid tags.
+
 - Add a CUDA 12.6 Docker image and publish both CPU and CUDA variants through
   the protected Docker Hub release workflow.
 

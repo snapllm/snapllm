@@ -16,7 +16,6 @@ permissions:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/snapllm
 
 jobs:
   publish:
@@ -35,6 +34,16 @@ jobs:
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release tag: $tag" >&2; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Normalize image name
+        id: image
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          username="$(printf '%s' "$DOCKERHUB_USERNAME" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          [[ "$username" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]] || { echo "Invalid Docker Hub username" >&2; exit 1; }
+          echo "name=${REGISTRY}/${username}/snapllm" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -58,7 +67,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ steps.image.outputs.name }}
           tags: |
             type=raw,value=${{ steps.release.outputs.version }}
             type=raw,value=latest
@@ -83,6 +92,6 @@ jobs:
           push: true
           build-args: SNAPLLM_VERSION=${{ steps.release.outputs.version }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}-cuda
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda
+            ${{ steps.image.outputs.name }}:${{ steps.release.outputs.version }}-cuda
+            ${{ steps.image.outputs.name }}:cuda
           labels: ${{ steps.meta.outputs.labels }}
