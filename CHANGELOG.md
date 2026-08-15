@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Disable `GGML_NATIVE` in Docker builds so CPU images compiled on CI runners
+  do not emit host-specific instructions such as AMX that crash on other
+  machines.
+
 - Fix Docker/Linux model loading by composing per-model workspace paths with
   platform-native separators instead of Windows-only backslashes.
 

@@ -1,6 +1,6 @@
 [package]
 name = "snapllm-desktop"
-version = "1.17.18"
+version = "1.17.19"
 description = "SnapLLM Desktop - Multi-Model LLM Serving Platform"
 authors = ["SnapLLM Team"]
 license = "MIT"
