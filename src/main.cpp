@@ -1009,7 +1009,8 @@ int main(int argc, char** argv) {
     if (!diffusion_models_to_load.empty() || !image_prompt.empty() ||
         !video_models_to_load.empty() || !video_prompt.empty()) {
         std::cout << "\n=== SnapLLM Diffusion Support ===\n";
-        diffusion_bridge = std::make_unique<DiffusionBridge>(workspace_root + "\\diffusion");
+        diffusion_bridge = std::make_unique<DiffusionBridge>(
+            (std::filesystem::path(workspace_root) / "diffusion").string());
 
         // Set progress callback
         diffusion_bridge->set_progress_callback([](int step, int total, double time_ms) {

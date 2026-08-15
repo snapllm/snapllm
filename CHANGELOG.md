@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix Docker/Linux model loading by composing per-model workspace paths with
+  platform-native separators instead of Windows-only backslashes.
+
 - Normalize Docker Hub usernames before constructing image references so
   whitespace or uppercase account input cannot produce invalid tags.
 

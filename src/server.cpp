@@ -485,7 +485,8 @@ static DiffusionBridge* get_diffusion_bridge(const std::string& workspace_root) 
     static std::unique_ptr<DiffusionBridge> instance;
     static std::once_flag flag;
     std::call_once(flag, [&]() {
-        instance = std::make_unique<DiffusionBridge>(workspace_root + "\\diffusion");
+        instance = std::make_unique<DiffusionBridge>(
+            (std::filesystem::path(workspace_root) / "diffusion").string());
     });
     return instance.get();
 }

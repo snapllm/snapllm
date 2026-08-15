@@ -2750,7 +2750,12 @@ std::shared_ptr<DequantCache> VPIDBridge::get_or_create_cache(
     }
 
     // Create new workspace for this model at: workspace_root/workspace_model_name/quant_type/workspace.bin
-    std::string workspace_path = workspace_root_ + "\\" + workspace_model_name + "\\" + quant_type + "\\workspace.bin";
+    // Use platform-native path composition. The previous hard-coded '\\'
+    // separator created literal backslashes on Linux containers, so the
+    // non-root runtime user could not create its workspace under /workspace.
+    const std::filesystem::path workspace_path_fs =
+        std::filesystem::path(workspace_root_) / workspace_model_name / quant_type / "workspace.bin";
+    const std::string workspace_path = workspace_path_fs.string();
     std::cout << "  [Per-Model Workspace] Creating: " << workspace_path << std::endl;
 
     // Create workspace directory
