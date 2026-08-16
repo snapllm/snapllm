@@ -1394,8 +1394,16 @@ export default function Models() {
                         <Eye className="w-4 h-4" />
                         Details
                       </Button>
-                      <IconButton icon={<RefreshCw className="w-4 h-4" />} label="Reload" />
-                      <IconButton icon={<Settings2 className="w-4 h-4" />} label="Configure" />
+                      <IconButton
+                        icon={<RefreshCw className="w-4 h-4" />}
+                        label="Reload"
+                        onClick={() => queryClient.invalidateQueries({ queryKey: ['models'] })}
+                      />
+                      <IconButton
+                        icon={<Settings2 className="w-4 h-4" />}
+                        label="Configure"
+                        onClick={() => { setSelectedModel(model); setShowRuntimeConfig(true); }}
+                      />
                       <IconButton
                         icon={<Trash2 className="w-4 h-4 text-error-500" />}
                         label="Unload"

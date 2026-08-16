@@ -153,7 +153,7 @@ build_gpu\bin\snapllm.exe --server --port 6930
 You should see:
 ```
 ================================================================
-  SnapLLM HTTP Server v1.17.22
+  SnapLLM HTTP Server v1.17.23
 ================================================================
   Listening on: http://127.0.0.1:6930
   Workspace:    C:\Users\YourName\SnapLLM_Workspace  (Windows)
@@ -180,7 +180,7 @@ curl http://localhost:6930/health
 
 Response:
 ```json
-{"status": "ok", "version": "1.17.22"}
+{"status": "ok", "version": "1.17.23"}
 ```
 
 ---
@@ -432,7 +432,7 @@ Wait until you see:
 Verify the backend is running:
 ```bash
 curl http://localhost:6930/health
-# Should return: {"status":"ok","version":"1.17.22"...}
+# Should return: {"status":"ok","version":"1.17.23"...}
 
 ## Run the local API as a background daemon
 

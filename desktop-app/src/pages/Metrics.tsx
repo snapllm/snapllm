@@ -132,31 +132,47 @@ function UsageDonutChart({ data }: { data: UsageByType[] }) {
 export default function Metrics() {
   const [timeRange, setTimeRange] = useState<'1h' | '24h' | '7d' | '30d'>('24h');
 
-  const { data: status } = useQuery({
+  const { data: status, refetch: refetchStatus } = useQuery({
     queryKey: ['server-status'],
     queryFn: getServerStatus,
     refetchInterval: 5000,
   });
 
-  const { data: modelsResponse } = useQuery({
+  const { data: modelsResponse, refetch: refetchModels } = useQuery({
     queryKey: ['models'],
     queryFn: listModels,
     refetchInterval: 10000,
   });
 
-  const { data: metricsData } = useQuery({
+  const { data: metricsData, refetch: refetchMetrics } = useQuery({
     queryKey: ['server-metrics'],
     queryFn: getMetrics,
     refetchInterval: 5000,
   });
 
-  const { data: cacheStats } = useQuery({
+  const { data: cacheStats, refetch: refetchCacheStats } = useQuery({
     queryKey: ['cache-stats'],
     queryFn: getCacheStats,
     refetchInterval: 5000,
   });
 
   const models = modelsResponse?.models || [];
+
+  const refreshAll = () => {
+    void Promise.all([refetchStatus(), refetchModels(), refetchMetrics(), refetchCacheStats()]);
+  };
+
+  const exportMetrics = () => {
+    const rows = TOP_MODELS.map((model) =>
+      [model.name, model.requests, model.avgLatency, model.throughput].join(','));
+    const csv = ['model,requests,avg_latency_ms,tokens_per_second', ...rows].join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `snapllm-metrics-${timeRange}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
   // Compute system resource metrics from cache stats
   const systemMetrics = React.useMemo(() => {
@@ -300,11 +316,11 @@ export default function Metrics() {
               </button>
             ))}
           </div>
-          <Button variant="secondary">
+          <Button variant="secondary" onClick={refreshAll}>
             <RefreshCw className="w-4 h-4" />
             Refresh
           </Button>
-          <Button variant="secondary">
+          <Button variant="secondary" onClick={exportMetrics}>
             <Download className="w-4 h-4" />
             Export
           </Button>
@@ -627,8 +643,8 @@ export default function Metrics() {
               </div>
             ))}
           </div>
-          <Button variant="ghost" size="sm" className="w-full mt-3">
-            View All Alerts
+          <Button variant="ghost" size="sm" className="w-full mt-3" onClick={refreshAll}>
+            Refresh Alerts
           </Button>
         </Card>
       </div>
@@ -641,11 +657,11 @@ export default function Metrics() {
             <p className="text-sm text-surface-500">Detailed metrics for loaded models</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm">
+            <Button variant="secondary" size="sm" onClick={refreshAll}>
               <Filter className="w-4 h-4 mr-1.5" />
               Filter
             </Button>
-            <Button variant="secondary" size="sm">
+            <Button variant="secondary" size="sm" onClick={exportMetrics}>
               <Download className="w-4 h-4 mr-1.5" />
               Export CSV
             </Button>
