@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a Docker Compose UI service that serves the Dashboard on port 9780 and
+  proxies API and streaming routes to the SnapLLM container.
+
 - Disable `GGML_NATIVE` in Docker builds so CPU images compiled on CI runners
   do not emit host-specific instructions such as AMX that crash on other
   machines.

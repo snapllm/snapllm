@@ -1,5 +1,6 @@
 services:
   snapllm:
+    image: maheshvaikri/snapllm:1.17.20
     build:
       context: .
       dockerfile: Dockerfile
@@ -10,7 +11,7 @@ services:
         SNAPLLM_ENABLE_MULTIMODAL: "ON"
     ports:
       - "127.0.0.1:6930:6930"
-    command: ["snapllm", "--server", "--host", "0.0.0.0", "--port", "6930", "--workspace-root", "/workspace"]
+    command: ["snapllm", "--server", "--host", "0.0.0.0", "--port", "6930", "--workspace-root", "/workspace", "--cors-origin", "http://localhost:9780", "--cors-origin", "http://127.0.0.1:9780"]
     environment:
       SNAPLLM_API_KEY: "${SNAPLLM_API_KEY:?Set SNAPLLM_API_KEY to at least 32 visible ASCII characters}"
       SNAPLLM_NETWORK_GUARD: "loopback-port-publish"
@@ -26,3 +27,25 @@ services:
     volumes:
       - ./workspace:/workspace
       - ./models:/models:ro
+  snapllm-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+      args:
+        VITE_API_URL: "http://localhost:6930"
+    image: maheshvaikri/snapllm-ui:1.17.20
+    depends_on:
+      snapllm:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:9780:80"
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
