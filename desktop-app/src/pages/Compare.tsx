@@ -263,7 +263,7 @@ export default function Compare() {
   const { data: modelsResponse, isLoading: modelsLoading } = useQuery({
     queryKey: ['models'],
     queryFn: listModels,
-    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
+    refetchInterval: 5000,
   });
 
   // Only show LLM models - diffusion/vision models can't be compared via chat completions

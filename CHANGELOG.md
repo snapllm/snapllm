@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep live UI queries polling after transient API errors so recovered daemon
+  state and metrics reconcile without a manual refresh.
+
 - Add a Docker Compose UI service that serves the Dashboard on port 9780 and
   proxies API and streaming routes to the SnapLLM container.
 

@@ -226,7 +226,7 @@ export default function Vision() {
   const { data: modelsResponse } = useQuery({
     queryKey: ['models'],
     queryFn: listModels,
-    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
+    refetchInterval: 5000,
   });
 
   // Vision-capable = type 'vision' OR LLM models with known multimodal architectures

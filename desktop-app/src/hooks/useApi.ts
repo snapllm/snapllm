@@ -215,7 +215,7 @@ export const useCacheStats = () => {
   return useQuery<CacheStatsResponse, Error>({
     queryKey: ['cacheStats'],
     queryFn: getCacheStats,
-    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
+    refetchInterval: 5000,
     retry: false,
   });
 };
@@ -231,7 +231,7 @@ export const useContextList = (tier?: string, modelId?: string, options?: UseQue
   return useQuery<ContextListResponse, Error>({
     queryKey: queryKeys.contextList(tier, modelId),
     queryFn: () => listContexts(tier, modelId),
-    refetchInterval: (query) => query.state.status === 'error' ? false : 10000,
+    refetchInterval: 10000,
     ...options,
   });
 };
@@ -255,7 +255,7 @@ export const useContextStats = (options?: UseQueryOptions<ContextStatsResponse, 
   return useQuery<ContextStatsResponse, Error>({
     queryKey: queryKeys.contextStats(),
     queryFn: getContextStats,
-    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
+    refetchInterval: 5000,
     retry: false,
     ...options,
   });

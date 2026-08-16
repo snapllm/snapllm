@@ -277,7 +277,7 @@ export default function Images() {
   const { data: diffusionModelsResponse } = useQuery({
     queryKey: ['models', 'diffusion'],
     queryFn: listDiffusionModels,
-    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
+    refetchInterval: 5000,
   });
 
   // Diffusion models only

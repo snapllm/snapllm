@@ -102,7 +102,7 @@ export default function BatchProcessing() {
   const { data: modelsResponse, isLoading: modelsLoading } = useQuery({
     queryKey: ['models'],
     queryFn: listModels,
-    refetchInterval: (query) => query.state.status === 'error' ? false : 5000,
+    refetchInterval: 5000,
   });
 
   const loadedModels = modelsResponse?.models?.filter((m: any) => m.status === 'loaded') || [];

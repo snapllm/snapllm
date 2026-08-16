@@ -7,7 +7,7 @@ setlocal enabledelayedexpansion
 :: This script creates a distributable release package with all necessary files.
 ::
 :: Usage: package_release.bat [version] [cpu|gpu]
-:: Example: package_release.bat 1.17.20 cpu
+:: Example: package_release.bat 1.17.21 cpu
 :: ============================================================================
 
 echo.
@@ -18,7 +18,7 @@ echo.
 
 :: Get version from argument or use default
 set "VERSION=%~1"
-if "%VERSION%"=="" set "VERSION=1.17.20"
+if "%VERSION%"=="" set "VERSION=1.17.21"
 set "MODE=%~2"
 if "%MODE%"=="" set "MODE=cpu"
 if /i "%MODE%"=="cuda" set "MODE=gpu"
