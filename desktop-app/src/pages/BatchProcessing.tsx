@@ -3,7 +3,7 @@
 // Process multiple prompts with tool calling support
 // ============================================================================
 
-import React, { useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
@@ -87,6 +87,7 @@ export default function BatchProcessing() {
   const [showSettings, setShowSettings] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   // Tool calling state
   const [enableTools, setEnableTools] = useState(false);
@@ -233,6 +234,34 @@ export default function BatchProcessing() {
     a.download = `batch-results-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const importItems = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const entries = Array.isArray(parsed) ? parsed : parsed.items;
+      if (!Array.isArray(entries)) throw new Error('Expected an array of batch items');
+      const imported = entries
+        .filter((entry): entry is { prompt: string; system_prompt?: string } =>
+          Boolean(entry && typeof entry.prompt === 'string'))
+        .map(entry => ({
+          id: crypto.randomUUID(),
+          prompt: entry.prompt,
+          systemPrompt: entry.system_prompt,
+          status: 'pending' as const,
+        }));
+      if (imported.length === 0) throw new Error('No prompts found in the selected file');
+      setBatchItems(imported);
+    } catch (error) {
+      setBatchItems(prev => prev.map(item => ({
+        ...item,
+        error: error instanceof Error ? error.message : 'Invalid batch file',
+        status: 'error' as const,
+      })));
+    }
   };
 
   // Stats
@@ -601,7 +630,8 @@ export default function BatchProcessing() {
                     Import/Export
                   </h4>
                   <div className="flex gap-2">
-                    <Button variant="secondary" size="sm" className="flex-1">
+                    <input ref={importInputRef} type="file" accept="application/json,.json" onChange={importItems} className="hidden" />
+                    <Button variant="secondary" size="sm" className="flex-1" onClick={() => importInputRef.current?.click()}>
                       <Upload className="w-4 h-4" />
                       Import
                     </Button>

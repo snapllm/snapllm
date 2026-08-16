@@ -1,11 +1,15 @@
 # Changelog
 
-## 1.17.23
+## 1.17.24
+
+- Wire Batch Processing import with JSON validation and prompt hydration.
+
+## 1.17.24
 
 - Wire Metrics refresh/export/alert controls and model reload/configure actions
   to live data and runtime configuration.
 
-## 1.17.23
+## 1.17.24
 
 - Fix context demotion persistence, tier accounting, stale cache cleanup, and
   visible UI errors when a demotion request is rejected.
