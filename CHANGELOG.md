@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.22
+
+- Fix context demotion persistence, tier accounting, stale cache cleanup, and
+  visible UI errors when a demotion request is rejected.
+
 ## Unreleased
 
 - Keep live UI queries polling after transient API errors so recovered daemon

@@ -1,13 +1,13 @@
 # Docker local smoke test — 2026-08-15
 
-Image: `snapllm:1.17.21-cpu`, built locally from the release tree with Docker
+Image: `snapllm:1.17.22-cpu`, built locally from the release tree with Docker
 Desktop Linux engine 29.6.1. The image was run as a non-root user with
 `D:\\Models` mounted read-only at `/models` and an API key supplied through the
 environment.
 
 Results:
 
-- `/health`: HTTP 200, version `1.17.21`.
+- `/health`: HTTP 200, version `1.17.22`.
 - `POST /api/v1/models/scan` for `/models`: HTTP 200, 48 models discovered.
 - `POST /api/v1/models/load` for `LFM2.5-1.2B-Instruct-Q5_K_M.gguf`: success,
   14.1 seconds, CPU mode.

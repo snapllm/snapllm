@@ -161,6 +161,20 @@ void test_cold_restore_promote_and_remove_accounting() {
                    promoted.total_memory_bytes == header.data_size,
                "promotion must transfer memory accounting without underflow");
 
+        expect(manager.demote(handle, "cold"),
+               "hot context must demote to cold tier");
+        const auto demoted = manager.get_stats();
+        expect(demoted.hot_contexts == 0,
+               "demotion must release the hot context count");
+        expect(demoted.cold_contexts == 1,
+               "demotion must add one cold context");
+        expect(demoted.total_memory_bytes == 0,
+               "demotion must release resident memory");
+        expect(fs::exists(paths.get_context_cache_path(context_id, "cold")),
+               "demotion must persist the cache in the cold tier");
+        expect(!fs::exists(paths.get_context_cache_path(context_id, "hot")),
+               "demotion must remove the stale hot-tier cache");
+
         expect(manager.remove(handle), "restored context must be removable");
         const auto removed = manager.get_stats();
         expect(removed.total_contexts == 0 && removed.total_memory_bytes == 0 &&

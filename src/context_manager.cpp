@@ -941,7 +941,9 @@ bool ContextManager::demote(const ContextHandle& handle, const std::string& targ
         return false;
     }
 
-    const std::string& current_tier = it->second.tier;
+    // Copy the tier before mutating the entry below. A reference would observe
+    // the later "cold" assignment and debit the wrong tier's counters.
+    const std::string current_tier = it->second.tier;
     size_t mem = it->second.kv_cache ? it->second.kv_cache->memory_bytes() : 0;
 
     if (target_tier == "warm" && current_tier == "hot") {
@@ -964,8 +966,26 @@ bool ContextManager::demote(const ContextHandle& handle, const std::string& targ
 
     if (target_tier == "cold" && (current_tier == "hot" || current_tier == "warm")) {
         // Save to disk and free memory
-        if (it->second.dirty) {
+        if (it->second.dirty || it->second.kv_cache) {
+            // Persist using the destination tier. Saving while the entry still
+            // says hot/warm leaves the cache in the wrong directory and makes
+            // the UI's demote action appear to succeed without a cold record.
+            const std::string previous_tier = it->second.tier;
+            it->second.tier = target_tier;
+            it->second.metadata.tier = target_tier;
             if (!save_to_disk(it->second)) {
+                it->second.tier = previous_tier;
+                it->second.metadata.tier = previous_tier;
+                return false;
+            }
+            // Do not leave a duplicate higher-tier file behind: load_from_disk
+            // searches hot/warm before cold and would otherwise resurrect the
+            // stale copy after a restart.
+            std::error_code cleanup_ec;
+            fs::remove(paths_.get_context_cache_path(handle.id, previous_tier), cleanup_ec);
+            if (cleanup_ec) {
+                std::cerr << "[SnapLLM] Failed to remove previous context tier file: "
+                          << cleanup_ec.message() << std::endl;
                 return false;
             }
         }

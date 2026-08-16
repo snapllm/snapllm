@@ -110,6 +110,7 @@ export default function Contexts() {
   const [filterModel, setFilterModel] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Ingest form
   const [ingestForm, setIngestForm] = useState<IngestFormData>({
@@ -185,8 +186,12 @@ export default function Contexts() {
   const demoteMutation = useMutation({
     mutationFn: demoteContext,
     onSuccess: () => {
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ['contexts'] });
       queryClient.invalidateQueries({ queryKey: ['contextStats'] });
+    },
+    onError: (error) => {
+      setActionError(error instanceof Error ? error.message : 'Unable to demote context');
     },
   });
 
@@ -403,6 +408,15 @@ export default function Contexts() {
 
       {/* Context List */}
       <Card className="overflow-hidden">
+        {actionError && (
+          <div role="alert" className="m-4 flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{actionError}</span>
+            <button className="ml-auto" onClick={() => setActionError(null)} aria-label="Dismiss error">
+              <XCircle className="h-4 w-4" />
+            </button>
+          </div>
+        )}
         <div className="p-4 border-b border-surface-200 dark:border-surface-700">
           <h3 className="text-lg font-semibold text-surface-900 dark:text-white flex items-center gap-2">
             <Layers className="w-5 h-5 text-purple-500" />
