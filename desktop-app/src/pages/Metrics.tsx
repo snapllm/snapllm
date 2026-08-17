@@ -495,7 +495,7 @@ export default function Metrics() {
         <Card className="p-6 col-span-2">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-surface-900 dark:text-white">Top Models by Usage</h3>
-            <Button variant="ghost" size="sm">View All</Button>
+            <Button variant="ghost" size="sm" onClick={refreshAll}>Refresh Usage</Button>
           </div>
           <div className="space-y-3">
             {TOP_MODELS.map((model, i) => (
