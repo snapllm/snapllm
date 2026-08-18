@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.26
+
+- Fix hardened Docker UI startup by bypassing nginx cache chown entrypoint
+  behavior and granting only the capabilities required for worker startup.
+
 ## 1.17.25
 
 - Wire the Metrics usage refresh control to live API queries.

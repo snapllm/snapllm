@@ -12,5 +12,9 @@ FROM nginx:1.27-alpine
 COPY docker/nginx-ui.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /src/desktop-app/dist /usr/share/nginx/html
 EXPOSE 80
+# Start nginx directly. The stock entrypoint attempts a cache-directory
+# chown, which is incompatible with the read-only, capability-dropped
+# production Compose profile; the configured tmpfs mounts are already writable.
+ENTRYPOINT ["nginx", "-g", "daemon off;"]
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1/ >/dev/null || exit 1
