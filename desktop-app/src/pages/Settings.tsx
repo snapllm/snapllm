@@ -228,6 +228,22 @@ export default function SettingsPage() {
     }
   };
 
+  const restartServer = async () => {
+    if (!isTauriAvailable()) return;
+    setDaemonBusy(true);
+    setDaemonError(null);
+    try {
+      await daemonCommand('stop');
+      await daemonCommand('start');
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      await refetchConfig();
+    } catch (error) {
+      setDaemonError(String(error));
+    } finally {
+      setDaemonBusy(false);
+    }
+  };
+
   const updateMutation = useMutation({
     mutationFn: (payload: ConfigUpdateRequest) => updateConfig(payload),
     onSuccess: (data) => {
@@ -463,7 +479,16 @@ export default function SettingsPage() {
 
       {restartFields.length > 0 && (
         <Alert variant="info" title="Restart required">
-          Some changes require a server restart: {restartFields.join(', ')}.
+          <div className="flex flex-wrap items-center gap-3">
+            <span>Some changes require a server restart: {restartFields.join(', ')}.</span>
+            {isTauriAvailable() ? (
+              <Button variant="secondary" size="sm" onClick={() => void restartServer()} disabled={daemonBusy}>
+                Restart Server
+              </Button>
+            ) : (
+              <code className="rounded bg-surface-100 px-2 py-1 text-xs dark:bg-surface-800">docker compose restart snapllm</code>
+            )}
+          </div>
         </Alert>
       )}
 

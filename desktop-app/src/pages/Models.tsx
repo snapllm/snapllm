@@ -1015,20 +1015,20 @@ export default function Models() {
   const [workspaceFolders, setWorkspaceFolders] = useState<WorkspaceFolderInfo[]>([]);
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(false);
 
-  // Sync defaults from server config (if available)
+  // Keep the folder selector synchronized with the live server configuration.
+  // A one-shot request left this page stuck on the startup default after
+  // Settings changed the models path.
+  const { data: configResponse } = useQuery({
+    queryKey: ['config'],
+    queryFn: getConfig,
+    refetchInterval: 5000,
+  });
+
   useEffect(() => {
-    const loadConfigDefaults = async () => {
-      try {
-        const cfg = await getConfig();
-        if (cfg?.default_models_path) {
-          setModelsFolder(cfg.default_models_path.replace(/\\/g, '/'));
-        }
-      } catch {
-        // Ignore and keep local defaults
-      }
-    };
-    loadConfigDefaults();
-  }, []);
+    if (configResponse?.default_models_path) {
+      setModelsFolder(configResponse.default_models_path.replace(/\\/g, '/'));
+    }
+  }, [configResponse?.default_models_path]);
 
   // Scan the models folder for .gguf files
   const scanCurrentFolder = async () => {

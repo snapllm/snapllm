@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.32
+
+- Add restart-required controls to Server Settings and continuously refresh
+  model-path configuration on the Models page.
+
 ## 1.17.31
 
 - Report HTTP 401 responses as authentication-required instead of generic
