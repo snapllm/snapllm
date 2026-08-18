@@ -1111,10 +1111,13 @@ export default function Models() {
     data: modelsResponse,
     isLoading,
     isError: modelsLoadFailed,
+    error: modelsLoadError,
+    refetch: refetchModels,
   } = useQuery({
     queryKey: ['models'],
     queryFn: listModels,
     refetchInterval: 5000,
+    retry: false,
   });
 
   const { data: availableModels, isLoading: isLoadingAvailable } = useQuery({
@@ -1130,6 +1133,8 @@ export default function Models() {
   });
 
   const models = modelsResponse?.models || [];
+  const modelsErrorMessage = modelsLoadError ? handleApiError(modelsLoadError) : '';
+  const modelsAuthRequired = /authentication required|unauthorized|401/i.test(modelsErrorMessage);
 
   // Mutations
   const loadMutation = useMutation({
@@ -1325,8 +1330,23 @@ export default function Models() {
           ) : modelsLoadFailed ? (
             <Card className="p-12 text-center">
               <AlertTriangle className="w-8 h-8 mx-auto text-error-500 mb-3" />
-              <p className="font-medium text-error-700 dark:text-error-300">Unable to load models</p>
-              <p className="mt-1 text-sm text-surface-500">Check the server connection and try again.</p>
+              <p className="font-medium text-error-700 dark:text-error-300">
+                {modelsAuthRequired ? 'API key required to load models' : 'Unable to load models'}
+              </p>
+              <p className="mt-1 text-sm text-surface-500">
+                {modelsAuthRequired
+                  ? 'Open Server Settings, apply the daemon API key, then retry.'
+                  : modelsErrorMessage || 'Check the server connection and try again.'}
+              </p>
+              <Button
+                className="mt-4"
+                variant="secondary"
+                size="sm"
+                leftIcon={<RefreshCw className="w-4 h-4" />}
+                onClick={() => void refetchModels()}
+              >
+                Retry
+              </Button>
             </Card>
           ) : models.length > 0 ? (
             models.map((model, i) => {

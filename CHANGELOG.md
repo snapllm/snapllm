@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.34
+
+- Show authentication-specific model loading errors and provide a retry
+  action instead of a generic “Unable to load models” state.
+
 ## 1.17.33
 
 - Add restart-required controls to Server Settings and continuously refresh

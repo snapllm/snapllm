@@ -1,11 +1,11 @@
 services:
   snapllm:
-    image: maheshvaikri/snapllm:1.17.33
+    image: maheshvaikri/snapllm:1.17.34
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        SNAPLLM_VERSION: "1.17.33"
+        SNAPLLM_VERSION: "1.17.34"
         SNAPLLM_CUDA: "OFF"
         SNAPLLM_ENABLE_DIFFUSION: "ON"
         SNAPLLM_ENABLE_MULTIMODAL: "ON"
@@ -34,7 +34,7 @@ services:
       dockerfile: Dockerfile.ui
       args:
         VITE_API_URL: "http://localhost:6930"
-    image: maheshvaikri/snapllm-ui:1.17.33
+    image: maheshvaikri/snapllm-ui:1.17.34
     depends_on:
       snapllm:
         condition: service_healthy
