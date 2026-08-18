@@ -635,6 +635,10 @@ export default function SettingsPage() {
             <div>
               <h2 className="text-lg font-semibold text-surface-900 dark:text-white">Workspace & Models</h2>
               <p className="text-sm text-surface-500">Paths used for vPID caches, logs, and model files.</p>
+              <p className="mt-1 text-xs text-surface-500">
+                The running server reports the active path below. In Docker, use the container path <code className="font-mono">/models</code>;
+                the host folder is configured with <code className="font-mono">SNAPLLM_HOST_MODELS_PATH</code>.
+              </p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Input
@@ -650,7 +654,9 @@ export default function SettingsPage() {
                 value={formState?.default_models_path || ''}
                 onChange={(event) => updateField('default_models_path', event.target.value)}
                 error={errors.default_models_path}
-                hint="Used for model discovery and uploads. Docker uses /models; map your host folder with SNAPLLM_HOST_MODELS_PATH."
+                hint={config?.default_models_path
+                  ? `Live server path: ${config.default_models_path}. Changes take effect after restart.`
+                  : 'Enter the path visible to the running server. Changes take effect after restart.'}
                 leftIcon={<FolderOpen className="w-4 h-4" />}
               />
             </div>

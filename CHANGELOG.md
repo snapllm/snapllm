@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.38
+
+- Make deployment-provided `SNAPLLM_MODELS_PATH` authoritative over stale
+  persisted paths and clarify the active server/container path in Settings.
+
 ## 1.17.37
 
 - Add a visible Generate Key control and show the server-reported models path

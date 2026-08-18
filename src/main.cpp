@@ -527,6 +527,14 @@ int main(int argc, char** argv) {
         std::cerr << "[Config] Warning: " << config_error << std::endl;
     }
 
+    // Deployment-provided model mounts are authoritative. This prevents a
+    // native Windows path persisted in the shared config volume from masking
+    // Docker's `/models` mount after a container restart.
+    if (const char* env_models = std::getenv("SNAPLLM_MODELS_PATH");
+        env_models && *env_models) {
+        default_models_path = env_models;
+    }
+
 #ifdef SNAPLLM_HAS_DIFFUSION
     // Diffusion model support
     std::vector<std::pair<std::string, std::string>> diffusion_models_to_load;
