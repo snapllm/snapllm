@@ -1240,6 +1240,27 @@ export default function Models() {
         </div>
       </div>
 
+      <Card className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <FolderOpen className="w-5 h-5 shrink-0 text-brand-600" />
+          <div className="min-w-0">
+            <p className="text-xs font-medium uppercase tracking-wide text-surface-500">Server models path</p>
+            <p className="truncate font-mono text-sm text-surface-900 dark:text-surface-100" title={modelsFolder}>
+              {modelsFolder || 'Not reported by server'}
+            </p>
+          </div>
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<RefreshCw className={clsx('w-4 h-4', isScanning && 'animate-spin')} />}
+          onClick={() => void scanCurrentFolder()}
+          disabled={isScanning || !modelsFolder}
+        >
+          Scan Path
+        </Button>
+      </Card>
+
       {/* Stats Overview */}
       <div className="grid grid-cols-4 gap-4">
         <Card className="p-4">

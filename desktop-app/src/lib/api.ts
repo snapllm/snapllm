@@ -171,7 +171,7 @@ api.interceptors.request.use((config) => {
 });
 
 let bootstrapPromise: Promise<boolean> | null = null;
-const bootstrapRuntimeApiKey = async (): Promise<boolean> => {
+export const bootstrapRuntimeApiKey = async (): Promise<boolean> => {
   if (!bootstrapPromise) {
     bootstrapPromise = fetch(`${API_TRANSPORT_BASE_URL}/api/v1/auth/bootstrap`, {
       headers: { Accept: 'application/json' },

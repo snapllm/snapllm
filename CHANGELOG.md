@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.37
+
+- Add a visible Generate Key control and show the server-reported models path
+  with a direct Scan Path action in Model Hub.
+
 ## 1.17.36
 
 - Generate a strong runtime API key automatically for non-loopback servers,

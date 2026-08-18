@@ -24,6 +24,7 @@ import {
   getDefaultModelsPath,
   getDefaultWorkspacePath,
   getRuntimeApiKeyValidationError,
+  bootstrapRuntimeApiKey,
   handleApiError,
   setRuntimeApiKey,
   updateConfig,
@@ -383,6 +384,18 @@ export default function SettingsPage() {
     updateMutation.mutate(buildConfigUpdatePayload(formState));
   };
 
+  const handleGenerateApiKey = async () => {
+    setApiKeyError(null);
+    setApiKeyStatus(null);
+    const bootstrapped = await bootstrapRuntimeApiKey();
+    if (bootstrapped) {
+      setApiKeyStatus('API key generated and applied automatically for this app session.');
+      await queryClient.invalidateQueries();
+    } else {
+      setApiKeyError('Automatic key generation is available for the local Docker/Desktop daemon only.');
+    }
+  };
+
   React.useEffect(() => {
     if (!isConnected || !queuedDraft || !formState || !baseState || !isDirty || autoApplyInFlight.current) return;
     const validation = validateForm(formState);
@@ -595,9 +608,14 @@ export default function SettingsPage() {
                     autoComplete="off"
                   />
                 </div>
-                <Button variant="secondary" onClick={handleApplyApiKey}>
-                  {apiKey ? 'Apply Key' : 'Clear Key'}
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="secondary" onClick={() => void handleGenerateApiKey()}>
+                    Generate Key
+                  </Button>
+                  <Button variant="secondary" onClick={handleApplyApiKey}>
+                    {apiKey ? 'Apply Key' : 'Clear Key'}
+                  </Button>
+                </div>
               </div>
               {apiKeyStatus && (
                 <p className="text-sm text-success-600 dark:text-success-400" role="status">

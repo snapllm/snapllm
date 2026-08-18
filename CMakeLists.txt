@@ -14,7 +14,7 @@ cmake_minimum_required(VERSION 3.18)
 #   - CPU only:   cmake -B build -DSNAPLLM_CUDA=OFF
 # =============================================================================
 
-project(SnapLLM VERSION 1.17.36 LANGUAGES CXX C)
+project(SnapLLM VERSION 1.17.37 LANGUAGES CXX C)
 
 configure_file(
     ${CMAKE_SOURCE_DIR}/include/snapllm/version.h.in
