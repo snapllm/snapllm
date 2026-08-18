@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.29
+
+- Mount a writable Docker config volume so Server Settings changes persist
+  instead of failing on the read-only application filesystem.
+
 ## 1.17.28
 
 - Persist Server Settings drafts locally and make offline/authenticated save
