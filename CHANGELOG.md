@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.17.35
+
+- Generate a strong runtime API key automatically for non-loopback servers,
+  bootstrap it for loopback-only Docker UI clients, and remove the need for
+  users to invent a random key during local setup.
+
 ## 1.17.34
 
 - Show authentication-specific model loading errors and provide a retry

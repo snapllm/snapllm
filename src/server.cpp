@@ -1217,6 +1217,20 @@ void SnapLLMServer::setup_routes() {
         };
         send_json(res, response.dump());
     });
+
+    // Docker's loopback-only port publishing still binds 0.0.0.0 inside the
+    // container. Bootstrap the generated key for the local UI without making
+    // users copy a random secret; non-loopback deployments must use an
+    // explicitly configured key and never expose this route.
+    svr_->Get("/api/v1/auth/bootstrap", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!authorize_request(req, res, false)) return;
+        const char* guard = std::getenv("SNAPLLM_NETWORK_GUARD");
+        if (!guard || std::string_view(guard) != "loopback-port-publish" || config_.api_key.empty()) {
+            send_error(res, "Automatic API key bootstrap is only available for loopback port publishing", "forbidden", 403);
+            return;
+        }
+        send_json(res, json{{"status", "success"}, {"api_key", config_.api_key}}.dump());
+    });
     svr_->Get("/api/v1/config/recommendations", [this](const httplib::Request& req, httplib::Response& res) {
         if (!authorize_request(req, res, true)) return;
         // Get system memory info

@@ -170,6 +170,36 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+let bootstrapPromise: Promise<boolean> | null = null;
+const bootstrapRuntimeApiKey = async (): Promise<boolean> => {
+  if (!bootstrapPromise) {
+    bootstrapPromise = fetch(`${API_TRANSPORT_BASE_URL}/api/v1/auth/bootstrap`, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    })
+      .then(async (response) => {
+        if (!response.ok) return false;
+        const payload = await response.json() as { api_key?: string };
+        if (!payload.api_key) return false;
+        setRuntimeApiKey(payload.api_key);
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => { bootstrapPromise = null; });
+  }
+  return bootstrapPromise;
+};
+
+api.interceptors.response.use(undefined, async (error: AxiosError) => {
+  const request = error.config as (AxiosError['config'] & { _bootstrapRetry?: boolean }) | undefined;
+  if (error.response?.status !== 401 || !request || request._bootstrapRetry || request.url?.includes('/auth/bootstrap')) {
+    return Promise.reject(error);
+  }
+  if (!await bootstrapRuntimeApiKey()) return Promise.reject(error);
+  request._bootstrapRetry = true;
+  return api.request(request);
+});
+
 // ============================================================================
 // Types matching the SnapLLM local API schemas
 // ============================================================================

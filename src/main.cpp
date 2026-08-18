@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cstring>
 #include <sstream>
+#include <random>
 
 using json = nlohmann::json;
 
@@ -91,6 +92,20 @@ static std::string get_default_config_path() {
     }
     return "/tmp/snapllm/config.json";
 #endif
+}
+
+static std::string generate_runtime_api_key() {
+    static constexpr char hex[] = "0123456789abcdef";
+    std::random_device random;
+    std::uniform_int_distribution<unsigned int> byte(0, 255);
+    std::string key;
+    key.reserve(64);
+    for (int i = 0; i < 32; ++i) {
+        const unsigned int value = byte(random);
+        key.push_back(hex[(value >> 4) & 0x0f]);
+        key.push_back(hex[value & 0x0f]);
+    }
+    return key;
 }
 
 static bool load_config_file(const std::string& path, json& out, std::string& error) {
@@ -238,7 +253,7 @@ void print_usage() {
     std::cout << "  --host HOST               Server host (default: 127.0.0.1)\n";
     std::cout << "  --port PORT               Server port (default: 6930)\n";
     std::cout << "  --ui-dir PATH             Web UI files directory (default: auto-detect)\n";
-    std::cout << "  SNAPLLM_API_KEY           API key environment variable (required off loopback)\n";
+    std::cout << "  SNAPLLM_API_KEY           Optional stable API key (generated automatically off loopback)\n";
     std::cout << "  SNAPLLM_NETWORK_GUARD       reverse-proxy or loopback-port-publish (required off loopback)\n";
     std::cout << "  --cors-origin ORIGIN      Allow an exact browser origin (repeatable)\n";
 #ifdef SNAPLLM_HAS_DIFFUSION
@@ -805,6 +820,12 @@ int main(int argc, char** argv) {
             if (ui_dir.empty() && fs::is_directory("ui", ec)) {
                 ui_dir = fs::canonical("ui", ec).string();
             }
+        }
+
+        if (!security::is_loopback_host(server_host) && server_api_key.empty()) {
+            server_api_key = generate_runtime_api_key();
+            std::cout << "[Server] Generated runtime API key: " << server_api_key << "\n"
+                      << "[Server] Use the local UI bootstrap or set SNAPLLM_API_KEY to keep a stable key.\n";
         }
 
         ServerConfig config;
