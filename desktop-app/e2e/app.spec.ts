@@ -31,7 +31,7 @@ test('all public UI routes render without runtime errors', async ({ page }) => {
   await page.route('**/health', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ status: 'ok', version: '1.17.27' }),
+    body: JSON.stringify({ status: 'ok', version: '1.17.28' }),
   }));
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));

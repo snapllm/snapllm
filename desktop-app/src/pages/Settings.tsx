@@ -66,6 +66,16 @@ const formatValue = (value?: string | number | boolean) => {
 };
 
 const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('windows');
+const SETTINGS_DRAFT_KEY = 'snapllm_settings_draft';
+
+const readSettingsDraft = (): SettingsFormState | null => {
+  try {
+    const raw = localStorage.getItem(SETTINGS_DRAFT_KEY);
+    return raw ? JSON.parse(raw) as SettingsFormState : null;
+  } catch {
+    return null;
+  }
+};
 
 const mapConfigToForm = (config: ConfigResponse): SettingsFormState => {
   const defaultWorkspaceBase = getDefaultWorkspacePath();
@@ -164,7 +174,7 @@ const validateForm = (values: SettingsFormState): SettingsErrors => {
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
-  const { data: config, error: configError } = useQuery({
+  const { data: config, error: configError, refetch: refetchConfig } = useQuery({
     queryKey: ['config'],
     queryFn: getConfig,
   });
@@ -174,7 +184,7 @@ export default function SettingsPage() {
     queryFn: getConfigRecommendations,
   });
 
-  const [formState, setFormState] = React.useState<SettingsFormState | null>(null);
+  const [formState, setFormState] = React.useState<SettingsFormState | null>(() => readSettingsDraft());
   const [baseState, setBaseState] = React.useState<SettingsFormState | null>(null);
   const [errors, setErrors] = React.useState<SettingsErrors>({});
   const [saveMessage, setSaveMessage] = React.useState<string | null>(null);
@@ -226,6 +236,7 @@ export default function SettingsPage() {
       setRestartFields(data.restart_required_fields || []);
       if (formState) {
         setBaseState(formState);
+        localStorage.removeItem(SETTINGS_DRAFT_KEY);
       }
       queryClient.invalidateQueries({ queryKey: ['config'] });
     },
@@ -250,13 +261,19 @@ export default function SettingsPage() {
   }, [formState, baseState]);
 
   React.useEffect(() => {
+    if (formState) {
+      localStorage.setItem(SETTINGS_DRAFT_KEY, JSON.stringify(formState));
+    }
+  }, [formState]);
+
+  React.useEffect(() => {
     if (!config) return;
     const nextForm = mapConfigToForm(config);
     const nextSerialized = JSON.stringify(nextForm);
     const baseSerialized = baseState ? JSON.stringify(baseState) : '';
-    const shouldSync = !baseState || !formState || (!isDirty && nextSerialized !== baseSerialized);
+    const shouldSync = !baseState || (!isDirty && nextSerialized !== baseSerialized);
     if (shouldSync) {
-      setFormState(nextForm);
+      setFormState(baseState ? nextForm : (formState || nextForm));
       setBaseState(nextForm);
       setErrors({});
     }
@@ -276,6 +293,7 @@ export default function SettingsPage() {
       setSaveError(null);
       setSaveMessage(null);
       setRestartFields([]);
+      localStorage.removeItem(SETTINGS_DRAFT_KEY);
     }
   };
 
@@ -295,6 +313,13 @@ export default function SettingsPage() {
 
   const handleSave = () => {
     if (!formState) return;
+    if (!isConnected) {
+      setSaveMessage(null);
+      setSaveError(authRequired
+        ? 'Enter and apply the daemon API key, then retry Save Changes.'
+        : 'The server is offline. Your draft is saved locally and will remain available when it reconnects.');
+      return;
+    }
     const validation = validateForm(formState);
     setErrors(validation);
     if (Object.keys(validation).length > 0) {
@@ -392,7 +417,7 @@ export default function SettingsPage() {
             leftIcon={<Save className="w-4 h-4" />}
             onClick={handleSave}
             isLoading={updateMutation.isPending}
-            disabled={!isDirty || !isConnected}
+            disabled={!isDirty}
           >
             Save Changes
           </Button>
@@ -402,8 +427,9 @@ export default function SettingsPage() {
       {!isConnected && (
         <Alert variant="warning" title={authRequired ? 'API key required' : 'Server offline'}>
           {authRequired
-            ? 'The daemon is reachable but requires authentication. Enter the same API key configured for the daemon below, apply it, then retry this page.'
-            : 'Start the SnapLLM server to apply settings changes. You can still edit values, but saving requires an active server instance.'}
+            ? 'The daemon is reachable but requires authentication. Enter the same API key configured for the daemon below, apply it, then retry configuration.'
+            : 'The server is offline. You can edit values and Save Changes will keep a local draft until the daemon reconnects.'}
+          <button className="ml-2 underline" onClick={() => void refetchConfig()}>Retry connection</button>
         </Alert>
       )}
 

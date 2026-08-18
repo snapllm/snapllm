@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.28
+
+- Persist Server Settings drafts locally and make offline/authenticated save
+  failures actionable instead of silently disabling the save control.
+
 ## 1.17.27
 
 - Make Docker host model mounting configurable and clarify container-visible
