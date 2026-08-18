@@ -1,11 +1,11 @@
 services:
   snapllm:
-    image: maheshvaikri/snapllm:1.17.35
+    image: maheshvaikri/snapllm:1.17.36
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        SNAPLLM_VERSION: "1.17.35"
+        SNAPLLM_VERSION: "1.17.36"
         SNAPLLM_CUDA: "OFF"
         SNAPLLM_ENABLE_DIFFUSION: "ON"
         SNAPLLM_ENABLE_MULTIMODAL: "ON"
@@ -17,6 +17,7 @@ services:
       # UI bootstraps it over the loopback-only published port. Set this for a
       # stable key in shared or automated environments.
       SNAPLLM_API_KEY: "${SNAPLLM_API_KEY:-}"
+      SNAPLLM_API_KEY_FILE: "/app/.config/snapllm/api_key"
       SNAPLLM_NETWORK_GUARD: "loopback-port-publish"
       SNAPLLM_MODELS_PATH: "/models"
     init: true
@@ -37,7 +38,7 @@ services:
       dockerfile: Dockerfile.ui
       args:
         VITE_API_URL: "http://localhost:6930"
-    image: maheshvaikri/snapllm-ui:1.17.35
+    image: maheshvaikri/snapllm-ui:1.17.36
     depends_on:
       snapllm:
         condition: service_healthy

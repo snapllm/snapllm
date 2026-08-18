@@ -108,6 +108,24 @@ static std::string generate_runtime_api_key() {
     return key;
 }
 
+static std::string load_or_generate_api_key(const std::string& config_path) {
+    const char* key_file_env = std::getenv("SNAPLLM_API_KEY_FILE");
+    const std::filesystem::path key_path = key_file_env && *key_file_env
+        ? std::filesystem::path(key_file_env)
+        : std::filesystem::path(config_path).parent_path() / "api_key";
+    std::ifstream input(key_path);
+    std::string key;
+    if (input && std::getline(input, key) && snapllm::security::meets_api_key_policy(key)) {
+        return key;
+    }
+    key = generate_runtime_api_key();
+    std::error_code error;
+    std::filesystem::create_directories(key_path.parent_path(), error);
+    std::ofstream output(key_path, std::ios::trunc);
+    if (output) output << key << '\n';
+    return key;
+}
+
 static bool load_config_file(const std::string& path, json& out, std::string& error) {
     if (path.empty()) return false;
     std::error_code ec;
@@ -823,9 +841,9 @@ int main(int argc, char** argv) {
         }
 
         if (!security::is_loopback_host(server_host) && server_api_key.empty()) {
-            server_api_key = generate_runtime_api_key();
-            std::cout << "[Server] Generated runtime API key: " << server_api_key << "\n"
-                      << "[Server] Use the local UI bootstrap or set SNAPLLM_API_KEY to keep a stable key.\n";
+            server_api_key = load_or_generate_api_key(config_path);
+            std::cout << "[Server] Runtime API key: " << server_api_key << "\n"
+                      << "[Server] The key is available to the local UI bootstrap and persisted in the runtime config volume.\n";
         }
 
         ServerConfig config;

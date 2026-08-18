@@ -73,7 +73,7 @@ struct ServerConfig {
     std::string default_models_path = "";    ///< Default models folder (default: ~/Models or C:\Models)
     std::string config_path = "";            ///< Config file path (auto-resolved if empty)
     bool cors_enabled = true;                ///< Enable strict allowlisted CORS for browser access
-    std::string api_key = "";                ///< Runtime-only API key; never persisted or returned
+    std::string api_key = "";                ///< Runtime API key; never returned by normal config
     std::vector<std::string> allowed_origins; ///< Exact additional browser origins
     size_t max_payload_bytes = 32 * 1024 * 1024; ///< Maximum HTTP request body (32 MiB)
     int timeout_seconds = 600;               ///< Request timeout

@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.17.35
+## 1.17.36
 
 - Generate a strong runtime API key automatically for non-loopback servers,
   bootstrap it for loopback-only Docker UI clients, and remove the need for
