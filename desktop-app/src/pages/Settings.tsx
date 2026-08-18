@@ -164,7 +164,7 @@ const validateForm = (values: SettingsFormState): SettingsErrors => {
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
-  const { data: config } = useQuery({
+  const { data: config, error: configError } = useQuery({
     queryKey: ['config'],
     queryFn: getConfig,
   });
@@ -188,6 +188,8 @@ export default function SettingsPage() {
   const [daemonBusy, setDaemonBusy] = React.useState(false);
 
   const isConnected = config?.status === 'success';
+  const configErrorMessage = configError ? handleApiError(configError) : '';
+  const authRequired = /authentication required|unauthorized|401/i.test(configErrorMessage);
   const features = config?.features || {};
 
   const refreshDaemonState = React.useCallback(async () => {
@@ -398,9 +400,10 @@ export default function SettingsPage() {
       </div>
 
       {!isConnected && (
-        <Alert variant="warning" title="Server offline">
-          Start the SnapLLM server to apply settings changes. You can still edit values, but saving
-          requires an active server instance.
+        <Alert variant="warning" title={authRequired ? 'API key required' : 'Server offline'}>
+          {authRequired
+            ? 'The daemon is reachable but requires authentication. Enter the same API key configured for the daemon below, apply it, then retry this page.'
+            : 'Start the SnapLLM server to apply settings changes. You can still edit values, but saving requires an active server instance.'}
         </Alert>
       )}
 
@@ -555,7 +558,7 @@ export default function SettingsPage() {
                 value={formState?.default_models_path || ''}
                 onChange={(event) => updateField('default_models_path', event.target.value)}
                 error={errors.default_models_path}
-                hint="Used for model discovery and uploads"
+                hint="Used for model discovery and uploads. Docker uses /models; map your host folder with SNAPLLM_HOST_MODELS_PATH."
                 leftIcon={<FolderOpen className="w-4 h-4" />}
               />
             </div>

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.17.27
+
+- Make Docker host model mounting configurable and clarify container-visible
+  model paths in Server Settings.
+- Distinguish authentication failures from an offline daemon in Settings.
+
 ## 1.17.26
 
 - Fix hardened Docker UI startup by bypassing nginx cache chown entrypoint

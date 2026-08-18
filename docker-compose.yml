@@ -1,6 +1,6 @@
 services:
   snapllm:
-    image: maheshvaikri/snapllm:1.17.26
+    image: maheshvaikri/snapllm:1.17.27
     build:
       context: .
       dockerfile: Dockerfile
@@ -26,14 +26,14 @@ services:
       - /tmp
     volumes:
       - ./workspace:/workspace
-      - ./models:/models:ro
+      - "${SNAPLLM_HOST_MODELS_PATH:-./models}:/models:ro"
   snapllm-ui:
     build:
       context: .
       dockerfile: Dockerfile.ui
       args:
         VITE_API_URL: "http://localhost:6930"
-    image: maheshvaikri/snapllm-ui:1.17.26
+    image: maheshvaikri/snapllm-ui:1.17.27
     depends_on:
       snapllm:
         condition: service_healthy
