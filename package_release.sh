@@ -6,7 +6,7 @@
 # This script creates a distributable release package with all necessary files.
 #
 # Usage: ./package_release.sh [version] [cpu|gpu]
-# Example: ./package_release.sh 1.17.29 cpu
+# Example: ./package_release.sh 1.17.30 cpu
 # ============================================================================
 
 set -e
@@ -18,7 +18,7 @@ echo "========================================"
 echo ""
 
 # Get version from argument or use default
-VERSION="${1:-1.17.29}"
+VERSION="${1:-1.17.30}"
 MODE="${2:-cpu}"
 if [[ "${MODE}" == "cuda" ]]; then MODE="gpu"; fi
 if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then

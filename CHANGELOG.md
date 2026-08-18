@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.30
+
+- Keep generated Docker configuration out of source control while preserving
+  the writable config mount directory.
+
 ## 1.17.29
 
 - Mount a writable Docker config volume so Server Settings changes persist

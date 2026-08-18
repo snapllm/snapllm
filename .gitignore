@@ -278,3 +278,6 @@ site/
 /build-security/
 /desktop-app/playwright-report/
 /desktop-app/test-results/
+# Docker runtime configuration is host-local and must never be committed.
+config/*
+!config/.gitkeep

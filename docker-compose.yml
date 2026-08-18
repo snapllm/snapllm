@@ -1,6 +1,6 @@
 services:
   snapllm:
-    image: maheshvaikri/snapllm:1.17.29
+    image: maheshvaikri/snapllm:1.17.30
     build:
       context: .
       dockerfile: Dockerfile
@@ -34,7 +34,7 @@ services:
       dockerfile: Dockerfile.ui
       args:
         VITE_API_URL: "http://localhost:6930"
-    image: maheshvaikri/snapllm-ui:1.17.29
+    image: maheshvaikri/snapllm-ui:1.17.30
     depends_on:
       snapllm:
         condition: service_healthy
