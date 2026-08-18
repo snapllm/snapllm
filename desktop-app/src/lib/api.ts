@@ -731,6 +731,10 @@ export const handleApiError = (error: unknown): string => {
       return 'API endpoint not found. Is the server running?';
     }
 
+    if (axiosError.response?.status === 401) {
+      return 'Authentication required. Enter the same SNAPLLM_API_KEY configured for the daemon and apply it in Server Settings.';
+    }
+
     if (axiosError.response?.status === 500) {
       return 'Internal server error. Check server logs.';
     }

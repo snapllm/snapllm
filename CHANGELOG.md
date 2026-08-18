@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.31
+
+- Report HTTP 401 responses as authentication-required instead of generic
+  server-offline errors in the UI.
+
 ## 1.17.30
 
 - Keep generated Docker configuration out of source control while preserving
