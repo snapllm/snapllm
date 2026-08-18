@@ -1,17 +1,17 @@
 services:
   snapllm:
-    image: maheshvaikri/snapllm:1.17.38
+    image: maheshvaikri/snapllm:1.17.39
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        SNAPLLM_VERSION: "1.17.38"
+        SNAPLLM_VERSION: "1.17.39"
         SNAPLLM_CUDA: "OFF"
         SNAPLLM_ENABLE_DIFFUSION: "ON"
         SNAPLLM_ENABLE_MULTIMODAL: "ON"
     ports:
       - "127.0.0.1:6930:6930"
-    command: ["snapllm", "--server", "--host", "0.0.0.0", "--port", "6930", "--workspace-root", "/workspace", "--cors-origin", "http://localhost:9780", "--cors-origin", "http://127.0.0.1:9780"]
+    command: ["snapllm", "--server", "--host", "0.0.0.0", "--port", "6930", "--cors-origin", "http://localhost:9780", "--cors-origin", "http://127.0.0.1:9780"]
     environment:
       # Optional for local Docker: the daemon generates a runtime key and the
       # UI bootstraps it over the loopback-only published port. Set this for a
@@ -20,6 +20,7 @@ services:
       SNAPLLM_API_KEY_FILE: "/app/.config/snapllm/api_key"
       SNAPLLM_NETWORK_GUARD: "loopback-port-publish"
       SNAPLLM_MODELS_PATH: "/models"
+      SNAPLLM_WORKSPACE_ROOT: "/workspace"
     init: true
     read_only: true
     security_opt:
@@ -38,7 +39,7 @@ services:
       dockerfile: Dockerfile.ui
       args:
         VITE_API_URL: "http://localhost:6930"
-    image: maheshvaikri/snapllm-ui:1.17.38
+    image: maheshvaikri/snapllm-ui:1.17.39
     depends_on:
       snapllm:
         condition: service_healthy

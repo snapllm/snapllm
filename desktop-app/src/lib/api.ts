@@ -1127,7 +1127,12 @@ export const scanModelsFolder = async (
     }
 
     if (!isTauriAvailable()) {
-      return [];
+      // Browser/Docker cannot read the host filesystem directly. Ask the
+      // daemon to scan its configured, container-visible directory instead.
+      const { data } = await api.post('/models/scan', { path: modelsPath });
+      return Array.isArray(data?.models)
+        ? data.models.map((model: ScannedModel) => normalizeModelPath(model.path)).filter(Boolean)
+        : [];
     }
 
     const entries = await readDir(modelsPath);

@@ -1,4 +1,4 @@
-# Server Settings and model-path QA (v1.17.38)
+# Server Settings and model-path QA (v1.17.39)
 
 ## Scope
 
@@ -22,7 +22,7 @@ applied after reconnect, and reflected by the Models page.
 npm --prefix desktop-app run lint                 PASS
 npm --prefix desktop-app run test -- --run       3 files, 17 tests PASS
 npm --prefix desktop-app run build                PASS
-node scripts/check_versions.mjs                   version_consistency: 1.17.38
+node scripts/check_versions.mjs                   version_consistency: 1.17.39
 ```
 
 The test `settings persistence contract` asserts that a user-selected model

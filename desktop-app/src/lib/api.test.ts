@@ -137,14 +137,14 @@ describe('desktop API contracts', () => {
     expect(getRequest()?.params).toEqual({});
   });
 
-  it('treats a React Query invocation as context, not a scan path', async () => {
+  it('treats a React Query invocation as context and scans through the daemon in browser mode', async () => {
     const getRequest = captureNextRequest();
 
     await scanModelsFolder({
       queryKey: ['models', 'scan'],
     });
 
-    expect(getRequest()?.url).toBe('/config');
+    expect(getRequest()?.url).toBe('/models/scan');
   });
 
   it('normalizes Windows model paths returned by folder scans', async () => {

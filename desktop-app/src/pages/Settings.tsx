@@ -220,6 +220,7 @@ export default function SettingsPage() {
   const [daemonState, setDaemonState] = React.useState<string>('unknown');
   const [daemonError, setDaemonError] = React.useState<string | null>(null);
   const [daemonBusy, setDaemonBusy] = React.useState(false);
+  const [restartCommandCopied, setRestartCommandCopied] = React.useState(false);
   const [queuedDraft, setQueuedDraft] = React.useState(() => readSettingsDraft() !== null);
   const autoApplyInFlight = React.useRef(false);
 
@@ -522,7 +523,20 @@ export default function SettingsPage() {
                 Restart Server
               </Button>
             ) : (
-              <code className="rounded bg-surface-100 px-2 py-1 text-xs dark:bg-surface-800">docker compose restart snapllm</code>
+              <div className="flex flex-wrap items-center gap-2">
+                <code className="rounded bg-surface-100 px-2 py-1 text-xs dark:bg-surface-800">docker compose restart snapllm</code>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    void navigator.clipboard?.writeText('docker compose restart snapllm');
+                    setRestartCommandCopied(true);
+                    window.setTimeout(() => setRestartCommandCopied(false), 2000);
+                  }}
+                >
+                  {restartCommandCopied ? 'Copied' : 'Copy command'}
+                </Button>
+              </div>
             )}
           </div>
         </Alert>

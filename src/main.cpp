@@ -453,6 +453,14 @@ int main(int argc, char** argv) {
     std::string config_path = get_default_config_path();
     std::string server_api_key;
     std::vector<std::string> allowed_origins;
+    if (const char* env_workspace = std::getenv("SNAPLLM_WORKSPACE_ROOT");
+        env_workspace && *env_workspace) {
+        workspace_root = env_workspace;
+    }
+    if (const char* env_models = std::getenv("SNAPLLM_MODELS_PATH");
+        env_models && *env_models) {
+        default_models_path = env_models;
+    }
     if (const char* env_api_key = std::getenv("SNAPLLM_API_KEY")) {
         server_api_key = env_api_key;
     }
@@ -531,8 +539,11 @@ int main(int argc, char** argv) {
     // native Windows path persisted in the shared config volume from masking
     // Docker's `/models` mount after a container restart.
     if (const char* env_models = std::getenv("SNAPLLM_MODELS_PATH");
-        env_models && *env_models) {
-        default_models_path = env_models;
+        env_models && *env_models && !default_models_path.empty()) {
+        std::error_code path_error;
+        if (!std::filesystem::exists(default_models_path, path_error)) {
+            default_models_path = env_models;
+        }
     }
 
 #ifdef SNAPLLM_HAS_DIFFUSION

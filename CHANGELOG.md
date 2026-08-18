@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.17.39
+
+- Make workspace/model deployment defaults explicit, let valid persisted paths
+  remain configurable, and route browser model scans through the daemon so
+  the Models-page Refresh action works in Docker.
+
 ## 1.17.38
 
 - Make deployment-provided `SNAPLLM_MODELS_PATH` authoritative over stale
