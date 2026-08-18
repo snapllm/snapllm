@@ -39,7 +39,7 @@ const STRATEGY_OPTIONS = [
   { value: 'performance', label: 'Performance' },
 ];
 
-type SettingsFormState = {
+export type SettingsFormState = {
   host: string;
   port: string;
   workspace_root: string;
@@ -172,11 +172,34 @@ const validateForm = (values: SettingsFormState): SettingsErrors => {
   return errors;
 };
 
+export const buildConfigUpdatePayload = (formState: SettingsFormState): ConfigUpdateRequest => ({
+  server: {
+    host: formState.host.trim(),
+    port: Number(formState.port),
+    cors_enabled: formState.cors_enabled,
+    timeout_seconds: Number(formState.timeout_seconds),
+    max_concurrent_requests: Number(formState.max_concurrent_requests),
+    max_active_inferences: Number(formState.max_active_inferences),
+  },
+  workspace: {
+    workspace_root: formState.workspace_root.trim(),
+    default_models_path: formState.default_models_path.trim(),
+  },
+  runtime: {
+    max_models: Number(formState.max_models),
+    default_ram_budget_mb: Number(formState.default_ram_budget_mb),
+    default_strategy: formState.default_strategy,
+    enable_gpu: formState.enable_gpu,
+  },
+});
+
 export default function SettingsPage() {
   const queryClient = useQueryClient();
   const { data: config, error: configError, refetch: refetchConfig } = useQuery({
     queryKey: ['config'],
     queryFn: getConfig,
+    refetchInterval: 5000,
+    retry: false,
   });
 
   const { data: recommendations } = useQuery({
@@ -196,6 +219,8 @@ export default function SettingsPage() {
   const [daemonState, setDaemonState] = React.useState<string>('unknown');
   const [daemonError, setDaemonError] = React.useState<string | null>(null);
   const [daemonBusy, setDaemonBusy] = React.useState(false);
+  const [queuedDraft, setQueuedDraft] = React.useState(() => readSettingsDraft() !== null);
+  const autoApplyInFlight = React.useRef(false);
 
   const isConnected = config?.status === 'success';
   const configErrorMessage = configError ? handleApiError(configError) : '';
@@ -253,6 +278,7 @@ export default function SettingsPage() {
       if (formState) {
         setBaseState(formState);
         localStorage.removeItem(SETTINGS_DRAFT_KEY);
+        setQueuedDraft(false);
       }
       queryClient.invalidateQueries({ queryKey: ['config'] });
     },
@@ -264,9 +290,10 @@ export default function SettingsPage() {
   });
 
   const isDirty = React.useMemo(() => {
-    if (!formState || !baseState) return false;
+    if (!formState) return false;
+    if (!baseState) return queuedDraft;
     return JSON.stringify(formState) !== JSON.stringify(baseState);
-  }, [formState, baseState]);
+  }, [formState, baseState, queuedDraft]);
 
   const changedFields = React.useMemo(() => {
     if (!formState || !baseState) return [] as string[];
@@ -297,6 +324,7 @@ export default function SettingsPage() {
 
   const updateField = <K extends keyof SettingsFormState>(key: K, value: SettingsFormState[K]) => {
     setFormState((prev) => (prev ? { ...prev, [key]: value } : prev));
+    setQueuedDraft(true);
     if (errors[key]) {
       setErrors((prev) => ({ ...prev, [key]: undefined }));
     }
@@ -309,6 +337,7 @@ export default function SettingsPage() {
       setSaveError(null);
       setSaveMessage(null);
       setRestartFields([]);
+      setQueuedDraft(false);
       localStorage.removeItem(SETTINGS_DRAFT_KEY);
     }
   };
@@ -329,17 +358,21 @@ export default function SettingsPage() {
 
   const handleSave = () => {
     if (!formState) return;
-    if (!isConnected) {
-      setSaveMessage(null);
-      setSaveError(authRequired
-        ? 'Enter and apply the daemon API key, then retry Save Changes.'
-        : 'The server is offline. Your draft is saved locally and will remain available when it reconnects.');
-      return;
-    }
     const validation = validateForm(formState);
     setErrors(validation);
     if (Object.keys(validation).length > 0) {
       setSaveError('Fix the highlighted fields before saving.');
+      return;
+    }
+    if (!isConnected) {
+      setSaveError(authRequired
+        ? 'Enter and apply the daemon API key, then retry Save Changes.'
+        : null);
+      setSaveMessage(authRequired
+        ? null
+        : 'Draft saved locally. It will be applied automatically when the daemon reconnects.');
+      setQueuedDraft(!authRequired);
+      localStorage.setItem(SETTINGS_DRAFT_KEY, JSON.stringify(formState));
       return;
     }
 
@@ -347,29 +380,19 @@ export default function SettingsPage() {
     setSaveMessage(null);
     setRestartFields([]);
 
-    const payload: ConfigUpdateRequest = {
-      server: {
-        host: formState.host.trim(),
-        port: Number(formState.port),
-        cors_enabled: formState.cors_enabled,
-        timeout_seconds: Number(formState.timeout_seconds),
-        max_concurrent_requests: Number(formState.max_concurrent_requests),
-        max_active_inferences: Number(formState.max_active_inferences),
-      },
-      workspace: {
-        workspace_root: formState.workspace_root.trim(),
-        default_models_path: formState.default_models_path.trim(),
-      },
-      runtime: {
-        max_models: Number(formState.max_models),
-        default_ram_budget_mb: Number(formState.default_ram_budget_mb),
-        default_strategy: formState.default_strategy,
-        enable_gpu: formState.enable_gpu,
-      },
-    };
-
-    updateMutation.mutate(payload);
+    updateMutation.mutate(buildConfigUpdatePayload(formState));
   };
+
+  React.useEffect(() => {
+    if (!isConnected || !queuedDraft || !formState || !baseState || !isDirty || autoApplyInFlight.current) return;
+    const validation = validateForm(formState);
+    if (Object.keys(validation).length > 0) return;
+    autoApplyInFlight.current = true;
+    setSaveMessage('Daemon reconnected. Applying your saved settings…');
+    updateMutation.mutate(buildConfigUpdatePayload(formState), {
+      onSettled: () => { autoApplyInFlight.current = false; },
+    });
+  }, [baseState, formState, isConnected, isDirty, queuedDraft, updateMutation]);
 
   const featureRows = [
     { key: 'llm', label: 'LLM Inference', description: 'Text and chat generation', enabled: features.llm },

@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.17.32
+## 1.17.33
 
 - Add restart-required controls to Server Settings and continuously refresh
   model-path configuration on the Models page.
