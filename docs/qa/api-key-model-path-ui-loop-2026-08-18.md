@@ -1,4 +1,4 @@
-# API-key and model-path UI QA (v1.17.39)
+# API-key and model-path UI QA (v1.17.40)
 
 - Server Settings now has a visible **Generate Key** action. It calls the
   loopback bootstrap route and applies the key in memory.
@@ -12,5 +12,5 @@ Evidence:
 npm --prefix desktop-app run lint           PASS
 npm --prefix desktop-app run test -- --run  3 files, 17 tests PASS
 npm --prefix desktop-app run build          PASS
-node scripts/check_versions.mjs             version_consistency: 1.17.39
+node scripts/check_versions.mjs             version_consistency: 1.17.40
 ```

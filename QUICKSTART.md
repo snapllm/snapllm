@@ -65,7 +65,7 @@ Recommended starter models:
 
 ### Step 1: Download
 
-Download the latest release from the [Releases](https://github.com/snapllm/snapllm/releases) page.
+Download the latest release from the [Releases](https://github.com/maheshvaikri-code/snapllm/releases) page.
 
 Choose:
 - `snapllm-X.X.X-windows-x64-gpu.zip` for Windows with GPU
@@ -99,7 +99,7 @@ run_server.bat
 ### Step 1: Clone Repository
 
 ```bash
-git clone --recursive https://github.com/snapllm/snapllm.git
+git clone --recursive https://github.com/maheshvaikri-code/snapllm.git
 cd snapllm
 ```
 
@@ -153,7 +153,7 @@ build_gpu\bin\snapllm.exe --server --port 6930
 You should see:
 ```
 ================================================================
-  SnapLLM HTTP Server v1.17.39
+  SnapLLM HTTP Server v1.17.40
 ================================================================
   Listening on: http://127.0.0.1:6930
   Workspace:    C:\Users\YourName\SnapLLM_Workspace  (Windows)
@@ -180,7 +180,7 @@ curl http://localhost:6930/health
 
 Response:
 ```json
-{"status": "ok", "version": "1.17.39"}
+{"status": "ok", "version": "1.17.40"}
 ```
 
 ---
@@ -432,7 +432,7 @@ Wait until you see:
 Verify the backend is running:
 ```bash
 curl http://localhost:6930/health
-# Should return: {"status":"ok","version":"1.17.39"...}
+# Should return: {"status":"ok","version":"1.17.40"...}
 
 ## Run the local API as a background daemon
 

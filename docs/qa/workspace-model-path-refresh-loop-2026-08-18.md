@@ -1,4 +1,4 @@
-# Workspace/model path and refresh QA (v1.17.39)
+# Workspace/model path and refresh QA (v1.17.40)
 
 - Docker defaults are supplied through `SNAPLLM_WORKSPACE_ROOT=/workspace` and
   `SNAPLLM_MODELS_PATH=/models`; persisted valid paths remain configurable.
@@ -16,5 +16,5 @@ Evidence:
 npm --prefix desktop-app run test -- --run  3 files, 17 tests PASS
 npm --prefix desktop-app run lint           PASS
 cmake --build build --config Debug --target snapllm_cli --parallel 2 PASS
-node scripts/check_versions.mjs             version_consistency: 1.17.39
+node scripts/check_versions.mjs             version_consistency: 1.17.40
 ```

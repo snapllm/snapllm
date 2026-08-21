@@ -1,4 +1,4 @@
-# Settings path recognition QA (v1.17.39)
+# Settings path recognition QA (v1.17.40)
 
 Docker's `SNAPLLM_MODELS_PATH=/models` now overrides a stale native path from
 the shared persisted config. Server Settings explains the distinction between
@@ -8,7 +8,7 @@ reported by `/api/v1/config`.
 Evidence:
 
 ```
-node scripts/check_versions.mjs             version_consistency: 1.17.39
+node scripts/check_versions.mjs             version_consistency: 1.17.40
 npm --prefix desktop-app run lint           PASS
 npm --prefix desktop-app run test -- --run  3 files, 17 tests PASS
 cmake --build build --config Debug --target snapllm_cli --parallel 2 PASS

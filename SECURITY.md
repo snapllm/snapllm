@@ -8,7 +8,7 @@ release. Only the latest released version is supported after a fix ships.
 ## Reporting a vulnerability
 
 Please do not open a public issue for a suspected vulnerability. Use
-[GitHub private vulnerability reporting](https://github.com/snapllm/snapllm/security/advisories/new)
+[GitHub private vulnerability reporting](https://github.com/maheshvaikri-code/snapllm/security/advisories/new)
 and include:
 
 - the affected version or commit;

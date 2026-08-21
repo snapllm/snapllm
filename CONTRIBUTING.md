@@ -61,12 +61,12 @@ Before contributing, ensure you have:
 1. Fork the repository on GitHub
 2. Clone your fork:
    ```bash
-   git clone --recursive https://github.com/snapllm/snapllm.git
+   git clone --recursive https://github.com/maheshvaikri-code/snapllm.git
    cd snapllm
    ```
 3. Add the upstream remote:
    ```bash
-   git remote add upstream https://github.com/snapllm/snapllm.git
+   git remote add upstream https://github.com/maheshvaikri-code/snapllm.git
    ```
 
 ---

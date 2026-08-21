@@ -1,10 +1,10 @@
 [package]
 name = "snapllm-desktop"
-version = "1.17.39"
+version = "1.17.40"
 description = "SnapLLM Desktop - Multi-Model LLM Serving Platform"
 authors = ["SnapLLM Team"]
 license = "MIT"
-repository = "https://github.com/snapllm/snapllm"
+repository = "https://github.com/maheshvaikri-code/snapllm"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

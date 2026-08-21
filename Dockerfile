@@ -32,7 +32,7 @@ ARG SNAPLLM_VERSION=dev
 LABEL org.opencontainers.image.title="SnapLLM" \
       org.opencontainers.image.description="Local multi-model inference API" \
       org.opencontainers.image.version="${SNAPLLM_VERSION}" \
-      org.opencontainers.image.source="https://github.com/snapllm/snapllm"
+      org.opencontainers.image.source="https://github.com/maheshvaikri-code/snapllm"
 
 ENV DEBIAN_FRONTEND=noninteractive
 

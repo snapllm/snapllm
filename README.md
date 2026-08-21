@@ -25,11 +25,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/snapllm/snapllm/releases"><img src="https://img.shields.io/github/v/tag/snapllm/snapllm?label=version&style=flat-square" alt="Version"/></a>
-  <a href="https://github.com/snapllm/snapllm/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/snapllm/snapllm/ci.yml?branch=main&style=flat-square" alt="CI"/></a>
-  <a href="https://github.com/snapllm/snapllm/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"/></a>
-  <a href="https://github.com/snapllm/snapllm/stargazers"><img src="https://img.shields.io/github/stars/snapllm/snapllm?style=flat-square" alt="Stars"/></a>
-  <a href="https://github.com/snapllm/snapllm/issues"><img src="https://img.shields.io/github/issues/snapllm/snapllm?style=flat-square" alt="Issues"/></a>
+  <a href="https://github.com/maheshvaikri-code/snapllm/releases"><img src="https://img.shields.io/github/v/tag/maheshvaikri-code/snapllm?label=version&style=flat-square" alt="Version"/></a>
+  <a href="https://github.com/maheshvaikri-code/snapllm/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/maheshvaikri-code/snapllm/ci.yml?branch=main&style=flat-square" alt="CI"/></a>
+  <a href="https://github.com/maheshvaikri-code/snapllm/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"/></a>
+  <a href="https://github.com/maheshvaikri-code/snapllm/stargazers"><img src="https://img.shields.io/github/stars/maheshvaikri-code/snapllm?style=flat-square" alt="Stars"/></a>
+  <a href="https://github.com/maheshvaikri-code/snapllm/issues"><img src="https://img.shields.io/github/issues/maheshvaikri-code/snapllm?style=flat-square" alt="Issues"/></a>
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs welcome"/>
   <img src="https://img.shields.io/badge/C++-17-blue.svg?style=flat-square" alt="C++17"/>
   <img src="https://img.shields.io/badge/CUDA-12.x-green.svg?style=flat-square" alt="CUDA 12.x"/>
@@ -120,7 +120,7 @@ configuration. No such guarantee is made by this README.
 
 ```bash
 # Clone the repository
-git clone https://github.com/snapllm/snapllm.git
+git clone https://github.com/maheshvaikri-code/snapllm.git
 cd snapllm
 
 # Build with CUDA support
@@ -823,7 +823,7 @@ We welcome contributions! Here's how to get started:
 
 ```bash
 # Clone the repository
-git clone https://github.com/snapllm/snapllm.git
+git clone https://github.com/maheshvaikri-code/snapllm.git
 cd snapllm
 
 # Build debug version
@@ -969,8 +969,8 @@ SnapLLM is built on the shoulders of giants:
 </p>
 
 <p align="center">
-  <a href="https://github.com/snapllm/snapllm/issues">Report Bug</a> |
-  <a href="https://github.com/snapllm/snapllm/issues">Request Feature</a> |
+  <a href="https://github.com/maheshvaikri-code/snapllm/issues">Report Bug</a> |
+  <a href="https://github.com/maheshvaikri-code/snapllm/issues">Request Feature</a> |
 </p>
 
 

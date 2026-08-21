@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.17.40
+
+- Update repository links, clone instructions, badges, security reporting,
+  Docker OCI metadata, and desktop Help links to the new canonical repository.
+
 ## 1.17.39
 
 - Make workspace/model deployment defaults explicit, let valid persisted paths

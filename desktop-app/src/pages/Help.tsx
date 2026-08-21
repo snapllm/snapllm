@@ -178,7 +178,7 @@ const FEATURE_GUIDES: HelpArticle[] = [
 ];
 
 const QUICK_LINKS: QuickLink[] = [
-  { title: 'GitHub Repository', description: 'Source code and issues', icon: Github, url: 'https://github.com/snapllm/snapllm' },
+  { title: 'GitHub Repository', description: 'Source code and issues', icon: Github, url: 'https://github.com/maheshvaikri-code/snapllm' },
 ];
 
 const FAQ = [
