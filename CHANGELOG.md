@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.17.41
+
+- Harden release automation by triggering only from immutable version tags,
+  checking out the tagged commit directly, and removing release dependency
+  caching that could be poisoned by untrusted workflow inputs.
+
 ## 1.17.40
 
 - Update repository links, clone instructions, badges, security reporting,

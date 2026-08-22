@@ -1,6 +1,6 @@
 {
   "name": "snapllm-desktop",
-  "version": "1.17.40",
+  "version": "1.17.41",
   "description": "SnapLLM - AI Inference Platform with Multi-Model Orchestration",
   "type": "module",
   "engines": {

@@ -1,4 +1,4 @@
-# Automatic API-key bootstrap QA (v1.17.40)
+# Automatic API-key bootstrap QA (v1.17.41)
 
 SnapLLM now generates a cryptographically strong 32-byte hexadecimal runtime
 key when a non-loopback server starts without `SNAPLLM_API_KEY`. The key is
@@ -20,5 +20,5 @@ cmake --build build --config Debug --target snapllm_cli --parallel 2  PASS
 npm --prefix desktop-app run lint                              PASS
 npm --prefix desktop-app run test -- --run                    3 files, 17 tests PASS
 npm --prefix desktop-app run build                             PASS
-node scripts/check_versions.mjs                                version_consistency: 1.17.40
+node scripts/check_versions.mjs                                version_consistency: 1.17.41
 ```
